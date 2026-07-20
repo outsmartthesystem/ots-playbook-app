@@ -37,7 +37,11 @@ async function buildChildSection(child, weekNum, week, dry) {
     }
     return null; // skip this child in the parent email
   }
-  const { rows: doneWk } = await query(`SELECT COUNT(*)::int AS n FROM events WHERE student_id=$1 AND type='step_done' AND created_at > now() - interval '7 days'`, [sid]);
+  // Count distinct steps currently done in the window, not raw step_done events
+  // (re-opening a step and re-submitting the done-note appends another event, which
+  // would over-report "marked N steps done" to the parent). progress is deduped by
+  // UNIQUE(student_id, step_id) and done_at is set on every mark-done.
+  const { rows: doneWk } = await query(`SELECT COUNT(*)::int AS n FROM progress WHERE student_id=$1 AND status='done' AND done_at > now() - interval '7 days'`, [sid]);
   const { rows: subCount } = await query(`SELECT COUNT(*)::int AS n FROM artifacts WHERE student_id=$1 AND status IN ('submitted','verified')`, [sid]);
   const { rows: verWk } = await query(`SELECT kind FROM artifacts WHERE student_id=$1 AND status='verified' AND reviewed_at > now() - interval '7 days'`, [sid]);
   const { rows: aotw } = await query(`SELECT kind, submitted_at FROM artifacts WHERE student_id=$1 AND status IN ('submitted','verified') ORDER BY COALESCE(reviewed_at,submitted_at) DESC LIMIT 1`, [sid]);

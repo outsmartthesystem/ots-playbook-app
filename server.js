@@ -189,7 +189,8 @@ app.get('/api/steps/:key', authRequired(), h(async (req, res) => {
   if (req.user.role === 'student') {
     const { rows: pr } = await query(`SELECT status, done_note, parked_reason FROM progress WHERE student_id = $1 AND step_id = $2`, [req.user.id, step.id]);
     progress = pr[0] || { status: 'not_started' };
-    if (progress.status === 'not_started') {
+    // A paused account is read-only: viewing a step must not write progress.
+    if (progress.status === 'not_started' && req.user.account_state !== 'paused') {
       await query(
         `INSERT INTO progress (student_id, step_id, status) VALUES ($1,$2,'in_progress')
          ON CONFLICT (student_id, step_id) DO NOTHING`, [req.user.id, step.id]
@@ -643,16 +644,24 @@ app.post('/api/admin/artifacts/:id/return', authRequired(), requireRole('admin')
   const id = parseInt(req.params.id, 10);
   const note = (req.body && req.body.note || '').trim();
   if (note.length < 20) return res.status(400).json({ error: 'Write at least a sentence (20+ chars) so the student knows exactly what to change.' });
-  const { rows: cur } = await query(`SELECT student_id, kind, current_version, data FROM artifacts WHERE id=$1 AND status='submitted'`, [id]);
-  if (!cur[0]) return res.status(409).json({ error: 'not in submitted state' });
-  const nextV = cur[0].current_version + 1;
+  // Atomic + guarded (mirror verify/submit): lock the row, re-check status under the
+  // lock, and predicate the UPDATE on status='submitted'. This serializes a concurrent
+  // verify (which then no-ops -> 409) and a double-click return (second sees the row is
+  // no longer 'submitted' -> 409, no duplicate artifact_versions row).
+  let out = null;
   await tx(async (client) => {
-    await client.query(`UPDATE artifacts SET status='returned', review_note=$1, reviewed_at=now(), reviewed_by=$2, current_version=$3, updated_at=now() WHERE id=$4`, [note, req.user.id, nextV, id]);
+    const { rows: cur } = await client.query(`SELECT student_id, kind, current_version, data FROM artifacts WHERE id=$1 AND status='submitted' FOR UPDATE`, [id]);
+    if (!cur[0]) return; // out stays null -> 409 below
+    const nextV = cur[0].current_version + 1;
+    const upd = await client.query(`UPDATE artifacts SET status='returned', review_note=$1, reviewed_at=now(), reviewed_by=$2, current_version=$3, updated_at=now() WHERE id=$4 AND status='submitted' RETURNING id`, [note, req.user.id, nextV, id]);
+    if (!upd.rows[0]) return;
     await client.query(`INSERT INTO artifact_versions (artifact_id, version, data, status_at_save, edited_by, change_note) VALUES ($1,$2,$3,'returned',$4,$5)`, [id, nextV, JSON.stringify(cur[0].data), req.user.id, note]);
+    out = cur[0];
   });
+  if (!out) return res.status(409).json({ error: 'not in submitted state' });
   await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES ($1,'return_artifact',$2)`, [req.user.id, JSON.stringify({ id })]);
-  await notify(cur[0].student_id, 'artifact_returned', `Coach Jay sent your ${cur[0].kind.replace(/_/g, ' ')} back with a note.`, `#/binder`);
-  await logEvent({ student_id: cur[0].student_id, actor_id: req.user.id, type: 'artifact_returned', entity_type: 'artifact', entity_id: id, detail: { kind: cur[0].kind } });
+  await notify(out.student_id, 'artifact_returned', `Coach Jay sent your ${out.kind.replace(/_/g, ' ')} back with a note.`, `#/binder`);
+  await logEvent({ student_id: out.student_id, actor_id: req.user.id, type: 'artifact_returned', entity_type: 'artifact', entity_id: id, detail: { kind: out.kind } });
   res.json({ ok: true, status: 'returned' });
 }));
 

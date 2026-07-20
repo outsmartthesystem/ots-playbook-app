@@ -4,24 +4,28 @@
 // nudge; then stop. The `sent` table makes each send once-only (atomic dedup).
 require('dotenv').config();
 const { query } = require('./lib/db');
-const { sendEmail } = require('./lib/email');
+const { sendEmail, isDry } = require('./lib/email');
 const { CHECKPOINTS_BY_KEY } = require('./lib/family');
 
 function phoenixNow() { return new Date(Date.now() - 7 * 3600 * 1000); }
 function phoenixWeekday() { return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][phoenixNow().getUTCDay()]; }
 function mondayOfPhoenix() { const d = phoenixNow(); const diff = (d.getUTCDay() + 6) % 7; const m = new Date(d); m.setUTCDate(d.getUTCDate() - diff); return m.toISOString().slice(0, 10); }
 
-// send once for (target, kind, occurrence); returns false if already sent
-async function onceOnly(target, kind, occurrence) {
+// send once for (target, kind, occurrence); returns false if already sent.
+// In dry mode never persist the dedup row (else a real send after DIGEST_DRY=0
+// would be permanently suppressed) but still return true so the dry preview runs.
+async function onceOnly(target, kind, occurrence, dry) {
+  if (dry) return true;
   try { await query(`INSERT INTO sent (target, kind, occurrence) VALUES ($1,$2,$3)`, [target, kind, occurrence]); return true; }
   catch (_) { return false; }
 }
-async function notifyBoth(userId, email, kind, body, occurrence) {
-  await query(`INSERT INTO notifications (user_id, kind, body, link) VALUES ($1,$2,$3,'#/score')`, [userId, kind, body]);
+async function notifyBoth(userId, email, kind, body, occurrence, dry) {
+  if (!dry) await query(`INSERT INTO notifications (user_id, kind, body, link) VALUES ($1,$2,$3,'#/score')`, [userId, kind, body]);
   if (email) await sendEmail({ to: email, subject: 'Playbook reminder', text: body, html: null });
 }
 
 async function run() {
+  const dry = isDry();
   const today = phoenixWeekday();
   const monday = mondayOfPhoenix();
   const yesterdayMonday = (() => { const d = phoenixNow(); const y = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][(d.getUTCDay() + 6) % 7]; return y; })();
@@ -40,13 +44,13 @@ async function run() {
   for (const s of students) {
     if (Number(s.filled) > 0) continue;
     if (s.review_day === today) {
-      if (await onceOnly('student:' + s.id, 'score_reminder', monday)) {
-        await notifyBoth(s.id, s.email, 'score_reminder', '20 minutes. Numbers first, feelings second. Fill in your scoreboard.', monday);
+      if (await onceOnly('student:' + s.id, 'score_reminder', monday, dry)) {
+        await notifyBoth(s.id, s.email, 'score_reminder', '20 minutes. Numbers first, feelings second. Fill in your scoreboard.', monday, dry);
         reminders += 1;
       }
     } else if (s.review_day === yesterdayMonday) {
-      if (await onceOnly('student:' + s.id, 'score_nudge', monday)) {
-        await notifyBoth(s.id, s.email, 'score_nudge', 'One more nudge on your scoreboard, then I will leave it. A true zero beats a comfortable guess.', monday);
+      if (await onceOnly('student:' + s.id, 'score_nudge', monday, dry)) {
+        await notifyBoth(s.id, s.email, 'score_nudge', 'One more nudge on your scoreboard, then I will leave it. A true zero beats a comfortable guess.', monday, dry);
         reminders += 1;
       }
     }
@@ -60,11 +64,11 @@ async function run() {
   );
   let apprNudges = 0;
   for (const a of appr) {
-    if (await onceOnly('approval:' + a.id, 'approval_nudge', 'once')) {
+    if (await onceOnly('approval:' + a.id, 'approval_nudge', 'once', dry)) {
       const cp = CHECKPOINTS_BY_KEY[a.checkpoint_key] || {};
-      await query(`INSERT INTO notifications (user_id, kind, body, link) VALUES ($1,'approval_nudge',$2,'#/approvals')`, [a.parent_uid, `Still waiting on your sign-off: ${cp.text || ''}`]);
+      if (!dry) await query(`INSERT INTO notifications (user_id, kind, body, link) VALUES ($1,'approval_nudge',$2,'#/approvals')`, [a.parent_uid, `Still waiting on your sign-off: ${cp.text || ''}`]);
       if (a.email) await sendEmail({ to: a.email, subject: 'A sign-off is waiting', text: cp.text || 'Your teen is waiting on a sign-off.', html: null });
-      await query(`INSERT INTO approval_events (approval_id, actor_id, actor_role, event) VALUES ($1,NULL,'system','reminded')`, [a.id]);
+      if (!dry) await query(`INSERT INTO approval_events (approval_id, actor_id, actor_role, event) VALUES ($1,NULL,'system','reminded')`, [a.id]);
       apprNudges += 1;
     }
   }

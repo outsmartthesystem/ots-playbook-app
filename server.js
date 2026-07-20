@@ -304,6 +304,13 @@ app.get('/api/admin/students/:id', authRequired(), requireRole('admin'), h(async
 
 // P0 demo: admin creates a bare student + single-use claim link (is_adult_student TRUE per P0 ruling).
 app.post('/api/admin/students', authRequired(), requireRole('admin'), h(async (req, res) => {
+  // Build/demo convenience only: this creates a STANDALONE adult-flagged student
+  // (is_adult_student=TRUE) that bypasses the parent-link and consent flow. Real
+  // students must come through the parent "add your teen" path, so this route is
+  // disabled in production (see counsel packet disclosure).
+  if (LAUNCH_MODE === 'production') {
+    return res.status(403).json({ error: 'Demo student creation is disabled in production. Add a student through the parent account.' });
+  }
   const first = (req.body && req.body.first_name || '').trim();
   const username = (req.body && req.body.username || '').trim() || null;
   if (!first) return res.status(400).json({ error: 'first_name required' });

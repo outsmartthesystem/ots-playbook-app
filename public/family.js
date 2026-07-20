@@ -197,3 +197,68 @@ async function screenWhatParentSees(){
     <div class="card"><strong>They see</strong><ul>${d.sees.map(x=>'<li>'+esc(x)+'</li>').join('')}</ul></div>
     <div class="card"><strong>They do not see</strong><ul>${d.not_sees.map(x=>'<li>'+esc(x)+'</li>').join('')}</ul></div>`;
 }
+
+/* ---------- P3a: question channel ---------- */
+async function screenQuestions(){
+  const d = await api('/api/me/questions');
+  if(!d.open){
+    app.innerHTML=`<h1>Ask Jay</h1><div class="card"><p>The question channel opens after a safety review. Until then, bring your questions to the biweekly call. Jay answers everything there.</p></div>
+      <p class="foot"><a href="#/">Back</a></p>`;
+    renderTabs(); return;
+  }
+  let chapters=[]; try{ chapters=(await api('/api/chapters')).chapters.filter(c=>c.number>=1); }catch(_){}
+  app.innerHTML=`<h1>Ask Jay</h1>
+    <div class="card" style="border-color:var(--accent2);font-size:13px">Questions here go to Jay and get answered in this thread. Your parent can see every question you ask and every reply. This is coursework help, not a private chat. If something personal or unsafe is going on, do not put it here. Use these instead: 988 (call or text) if you are in crisis, 911 if someone is in danger right now.</div>
+    <div class="card">
+      <label>About which chapter?</label>
+      <select id="q_ch">${chapters.map(c=>`<option value="${c.stable_key}">Ch ${c.number}: ${esc(c.title)}</option>`).join('')}</select>
+      <label>Your question</label><textarea id="q_body" rows="3" maxlength="2000"></textarea>
+      <div id="q_err" class="err"></div>
+      <button onclick="askQuestion()">Send to Jay</button>
+    </div>
+    <h2>Your questions</h2>
+    ${d.threads.length?d.threads.map(t=>`<div class="card">
+      <div class="muted">${new Date(t.created_at).toLocaleString()}${t.held?' &middot; set aside for review':''}</div>
+      <p>${esc(t.body)}</p>
+      ${t.replies.map(r=>`<div style="margin:6px 0;padding:8px;background:var(--panel);border-radius:6px"><strong>${esc(r.from)}:</strong> ${r.held?'<span class="muted">(set aside for review)</span>':esc(r.body)}</div>`).join('')}
+    </div>`).join(''):'<p class="muted">No questions yet.</p>'}`;
+  renderTabs();
+}
+async function askQuestion(){
+  const body=val('q_body'); const chapter_key=val('q_ch');
+  try{ const r=await api('/api/questions',{method:'POST',body:JSON.stringify({body,chapter_key})});
+    if(r.held) alert(r.message+'\n\n'+r.crisis_lines);
+    screenQuestions();
+  }catch(e){ document.getElementById('q_err').textContent=e.message; }
+}
+async function screenInbox(){
+  const d=await api('/api/admin/questions');
+  app.innerHTML=`<a class="muted" href="#/admin">&lsaquo; Cohort</a><h1>Question inbox (${d.questions.length})</h1>
+    <p class="muted">SLA: ${esc(d.sla_business_days)} business days. Flagged items first.</p>
+    ${d.questions.length?d.questions.map(q=>`<div class="station" onclick="location.hash='#/inbox/${q.id}'">
+      <div><strong>${esc(q.first_name)} ${esc(q.last_initial||'')}</strong> ${q.status==='quarantined'?'<span class="pill parked">flagged</span>':''}
+        <div class="muted">Ch ${q.chapter_number||''} &middot; ${new Date(q.created_at).toLocaleString()}</div></div>
+      <span class="pill">${esc(q.status)}</span></div>`).join(''):'<p class="muted">Empty. Nice.</p>'}`;
+  renderTabs();
+}
+async function screenInboxThread(id){
+  const d=await api('/api/admin/questions/'+id); const q=d.question;
+  const flagged = q.class!=='QUESTION' || q.status==='quarantined';
+  const dnc = ['ABUSE','EXPLOITATION_SEXTORTION'].includes(q.class);
+  app.innerHTML=`<a class="muted" href="#/inbox">&lsaquo; Inbox</a>
+    <h1>${esc(q.first_name)}: ${esc(q.class)}</h1>
+    ${flagged?`<div class="card" style="border-color:var(--accent2)"><strong>Safety-flagged (${esc(q.class)}).</strong> Follow docs/SAFETY-SOP.md. ${dnc?'DO NOT contact the parent.':''} This read is audit-logged.</div>`:''}
+    <div class="card"><p>${esc(q.body)}</p></div>
+    ${d.replies.map(r=>`<div class="card"><strong>${r.author_id===q.student_id?'student':'jay'}:</strong> ${esc(r.body)}</div>`).join('')}
+    ${!flagged?`<div class="card">
+      <div>${(d.canned||[]).map(c=>`<button class="ghost" style="font-size:12px;padding:6px" data-body="${esc(c.body)}" onclick="document.getElementById('ans').value=this.dataset.body">${esc(c.title)}</button>`).join(' ')}</div>
+      <textarea id="ans" rows="3"></textarea><div id="ans_err" class="err"></div>
+      <button onclick="answerQuestion(${id})">Answer</button></div>`
+      :'<p class="muted">Flagged threads are handled per the SOP, not answered as coursework here.</p>'}`;
+  renderTabs();
+}
+async function answerQuestion(id){
+  const body=val('ans');
+  try{ await api('/api/admin/questions/'+id+'/reply',{method:'POST',body:JSON.stringify({body})}); location.hash='#/inbox'; }
+  catch(e){ document.getElementById('ans_err').textContent=e.message; }
+}

@@ -69,7 +69,9 @@ function publicUser(u) {
 // ---------- health / version (plan 5.6 counsel gate) ----------
 app.get('/health', h(async (req, res) => {
   const missingCounsel = LAUNCH_MODE === 'production' ? COUNSEL_KEYS.filter((k) => !process.env[k]) : [];
-  const ready = missingCounsel.length === 0;
+  // backup-responder health gate (plan 5.2.6 / 6.6): production needs a responder AND a backup
+  const missingResponders = LAUNCH_MODE === 'production' ? ['SAFETY_ALERT_TO', 'SAFETY_ALERT_BACKUP_TO'].filter((k) => !process.env[k]) : [];
+  const ready = missingCounsel.length === 0 && missingResponders.length === 0;
   let db = 'unknown';
   try { await query('SELECT 1'); db = 'ok'; } catch (_) { db = 'error'; }
   res.status(ready && db === 'ok' ? 200 : 503).json({
@@ -78,6 +80,7 @@ app.get('/health', h(async (req, res) => {
     questions_enabled: QUESTIONS_ENABLED,
     counsel_signoff_complete: missingCounsel.length === 0,
     missing_counsel_signoffs: missingCounsel,
+    missing_responders: missingResponders,
     db,
   });
 }));
@@ -961,6 +964,189 @@ app.post('/api/admin/invite-family', authRequired(), requireRole('admin'), h(asy
   res.json({ ok: true, emailed: true });
 }));
 
+// ================= P3a: the question channel (behind QUESTIONS_ENABLED) =================
+const classifier = require('./lib/classifier');
+const CRISIS = classifier.CRISIS_LINES;
+
+// every error on this channel repeats the crisis lines and never dead-ends (plan 5.2.7)
+function channelErr(res, status, msg) { return res.status(status).json({ error: msg, crisis_lines: CRISIS }); }
+function questionsOpen() { return process.env.QUESTIONS_ENABLED === '1'; }
+
+// rate limit: 10 submissions/day across questions+replies, 5-minute cooldown
+async function submitGuard(studentId) {
+  const { rows: c } = await query(
+    `SELECT (SELECT count(*) FROM questions WHERE student_id=$1 AND created_at > now() - interval '1 day')
+          + (SELECT count(*) FROM question_replies WHERE author_id=$1 AND created_at > now() - interval '1 day') AS n,
+            GREATEST(
+              COALESCE((SELECT max(created_at) FROM questions WHERE student_id=$1),'epoch'),
+              COALESCE((SELECT max(created_at) FROM question_replies WHERE author_id=$1),'epoch')) AS last_at`,
+    [studentId]
+  );
+  if (Number(c[0].n) >= 10) return { ok: false, msg: 'That is 10 messages today, the daily limit. Take a breath and come back tomorrow.' };
+  if (c[0].last_at && (Date.now() - new Date(c[0].last_at).getTime()) < 5 * 60 * 1000) {
+    return { ok: false, msg: 'Give it 5 minutes between messages. Jay reads every one.' };
+  }
+  return { ok: true };
+}
+
+async function raiseSafetyEvent({ questionId = null, replyId = null, verdict, student, threadId }) {
+  const { rows } = await query(
+    `INSERT INTO safety_events (question_id, reply_id, class, severity, responder_notified_at) VALUES ($1,$2,$3,$4,now()) RETURNING id`,
+    [questionId, replyId, verdict.class, verdict.severity]
+  );
+  const eventId = rows[0].id;
+  const to = process.env.SAFETY_ALERT_TO || 'jay@outsmartthesystem.org';
+  const backup = process.env.SAFETY_ALERT_BACKUP_TO;
+  const instr = verdict.do_not_contact_parent ? 'Do NOT contact the parent.' : verdict.class === 'THREAT' ? 'Escalate to a supervisor immediately.' : 'Follow the SOP; do not contact the parent unless policy permits.';
+  const body = `Event ID: ${eventId}\nFlag: ${verdict.class}\nSeverity: ${verdict.severity}\nStudent first name: ${student.first_name}\nStudent age: ${student.age_at_signup || 'n/a'}\nThread ID: ${threadId}\nResponder instructions: ${instr}\nNo student quote is included, by policy.`;
+  await sendEmail({ to: backup ? `${to},${backup}` : to, subject: `[OTS SAFETY] ${verdict.class} | Event ${eventId} | ${student.first_name} (age ${student.age_at_signup || '?'})`, text: body, html: null });
+  // in-app admin flag, also no quotes
+  await query(`INSERT INTO notifications (user_id, kind, body, link) SELECT id,'safety_flag',$1,'#/inbox' FROM users WHERE role='admin' AND deleted_at IS NULL`,
+    [`A safety-flagged message needs review (class ${verdict.class}, event ${eventId}). No quotes shown.`]);
+  return eventId;
+}
+
+// student asks a question
+app.post('/api/questions', authRequired(), requireRole('student'), h(async (req, res) => {
+  if (!questionsOpen()) return channelErr(res, 403, 'The question channel is not open yet. It opens after a safety review. On the biweekly call you can ask Jay anything.');
+  const body = (req.body && req.body.body || '').trim();
+  const qtype = (req.body && req.body.qtype || 'other').slice(0, 30);
+  if (!body) return channelErr(res, 400, 'Write your question first.');
+  if (body.length > 2000) return channelErr(res, 400, 'Keep it under 2000 characters.');
+  const guard = await submitGuard(req.user.id);
+  if (!guard.ok) return channelErr(res, 429, guard.msg);
+  // resolve anchor
+  let chapterId = null; let stepId = null;
+  if (req.body.step_key) { const { rows } = await query(`SELECT id, chapter_id FROM steps WHERE stable_key=$1`, [req.body.step_key]); if (rows[0]) { stepId = rows[0].id; chapterId = rows[0].chapter_id; } }
+  else if (req.body.chapter_key) { const { rows } = await query(`SELECT id FROM chapters WHERE stable_key=$1`, [req.body.chapter_key]); if (rows[0]) chapterId = rows[0].id; }
+  const verdict = await classifier.classify({ text: body });
+  const status = verdict.serious ? 'quarantined' : 'open';
+  const { rows: q } = await query(
+    `INSERT INTO questions (student_id, chapter_id, step_id, body, qtype, class, parent_visible, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [req.user.id, chapterId, stepId, body, qtype, verdict.class, verdict.parent_visible, status]
+  );
+  const qid = q[0].id;
+  if (verdict.serious) await raiseSafetyEvent({ questionId: qid, verdict, student: req.user, threadId: qid });
+  await logEvent({ student_id: req.user.id, actor_id: req.user.id, type: 'question_asked', entity_type: 'question', entity_id: qid, detail: { class: verdict.held ? 'held' : 'question' } });
+  res.json({
+    ok: true, id: qid, held: verdict.held,
+    message: verdict.held
+      ? 'This message was set aside because it looks like it might be about something serious, not coursework. A trained OTS responder may check in. It is not visible in your parent view right now.'
+      : 'Sent to Jay. Your parent can see this thread.',
+    crisis_lines: CRISIS,
+  });
+}));
+
+// student replies in their own thread
+app.post('/api/questions/:id/reply', authRequired(), requireRole('student'), h(async (req, res) => {
+  if (!questionsOpen()) return channelErr(res, 403, 'The question channel is not open yet.');
+  const id = parseInt(req.params.id, 10);
+  const body = (req.body && req.body.body || '').trim();
+  if (!body) return channelErr(res, 400, 'Write your reply first.');
+  if (body.length > 2000) return channelErr(res, 400, 'Keep it under 2000 characters.');
+  const { rows: qr } = await query(`SELECT id FROM questions WHERE id=$1 AND student_id=$2`, [id, req.user.id]);
+  if (!qr[0]) return channelErr(res, 404, 'That thread was not found.');
+  const guard = await submitGuard(req.user.id);
+  if (!guard.ok) return channelErr(res, 429, guard.msg);
+  const verdict = await classifier.classify({ text: body });
+  const { rows: r } = await query(
+    `INSERT INTO question_replies (question_id, author_id, body, class, parent_visible) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [id, req.user.id, body, verdict.class, verdict.parent_visible]
+  );
+  if (verdict.serious) {
+    // pull the WHOLE thread from the parent view the moment it becomes a safety event
+    // (the parent may be the subject). The question stops being parent_visible too.
+    await query(`UPDATE questions SET status='quarantined', parent_visible=FALSE WHERE id=$1`, [id]);
+    await raiseSafetyEvent({ replyId: r[0].id, verdict, student: req.user, threadId: id });
+  } else {
+    // a normal (or held-but-not-serious) follow-up reopens the thread so it returns to Jay's inbox
+    await query(`UPDATE questions SET status='open' WHERE id=$1 AND status IN ('answered','closed')`, [id]);
+  }
+  res.json({ ok: true, held: verdict.held, crisis_lines: CRISIS,
+    message: verdict.held ? 'This reply was set aside for review and is not in your parent view. If you are in danger, call or text 988, or 911.' : 'Sent.' });
+}));
+
+// student reads their own threads (sees their own messages + parent-visible replies from Jay;
+// held messages carry the honest notice)
+app.get('/api/me/questions', authRequired(), requireRole('student'), h(async (req, res) => {
+  if (!questionsOpen()) return res.json({ open: false, threads: [] });
+  const { rows: qs } = await query(`SELECT id, body, qtype, class, parent_visible, status, created_at FROM questions WHERE student_id=$1 ORDER BY created_at DESC`, [req.user.id]);
+  const threads = [];
+  for (const q of qs) {
+    const { rows: reps } = await query(`SELECT author_id, body, parent_visible, class, created_at FROM question_replies WHERE question_id=$1 ORDER BY created_at`, [q.id]);
+    threads.push({
+      id: q.id, qtype: q.qtype, status: q.status, created_at: q.created_at,
+      held: classifier.isHeld(q.class),
+      body: q.body, // the student always sees their own words
+      replies: reps.map((r) => ({ from: r.author_id === req.user.id ? 'you' : 'jay', body: r.body, held: classifier.isHeld(r.class) })),
+    });
+  }
+  res.json({ open: true, threads, visibility: 'Questions here go to Jay. Your parent can see every question and reply, except anything a safety check sets aside.' });
+}));
+
+// admin inbox
+app.get('/api/admin/questions', authRequired(), requireRole('admin'), h(async (req, res) => {
+  const { rows } = await query(
+    `SELECT q.id, q.class, q.status, q.qtype, q.created_at, q.first_response_at, u.first_name, u.last_initial,
+            (SELECT number FROM chapters c WHERE c.id=q.chapter_id) AS chapter_number
+       FROM questions q JOIN users u ON u.id=q.student_id
+      WHERE q.status IN ('open','quarantined') ORDER BY (q.status='quarantined') DESC, q.created_at ASC`
+  );
+  const { rows: sla } = await query(`SELECT value FROM app_config WHERE key='sla_business_days'`);
+  res.json({ questions: rows, sla_business_days: sla[0] ? sla[0].value : '2' });
+}));
+
+// admin reads a full thread. Reading a held/quarantined message writes an audit row (plan 5.2.5).
+app.get('/api/admin/questions/:id', authRequired(), requireRole('admin'), h(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { rows: q } = await query(`SELECT q.*, u.first_name, u.last_initial, u.age_at_signup FROM questions q JOIN users u ON u.id=q.student_id WHERE q.id=$1`, [id]);
+  if (!q[0]) return res.status(404).json({ error: 'not found' });
+  const { rows: reps } = await query(`SELECT id, author_id, body, class, parent_visible, created_at FROM question_replies WHERE question_id=$1 ORDER BY created_at`, [id]);
+  const held = classifier.isHeld(q[0].class) || reps.some((r) => classifier.isHeld(r.class));
+  if (held) {
+    await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES ($1,'quarantine_read',$2)`, [req.user.id, JSON.stringify({ question_id: id, class: q[0].class })]);
+  }
+  const { rows: canned } = await query(`SELECT id, title, body FROM canned_answers ORDER BY id`);
+  res.json({ question: q[0], replies: reps, canned });
+}));
+
+// admin answers (immutable reply)
+app.post('/api/admin/questions/:id/reply', authRequired(), requireRole('admin'), h(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const body = (req.body && req.body.body || '').trim();
+  if (!body) return res.status(400).json({ error: 'write your answer' });
+  const { rows: q } = await query(`SELECT student_id, class, status FROM questions WHERE id=$1`, [id]);
+  if (!q[0]) return res.status(404).json({ error: 'not found' });
+  // never answer a flagged/quarantined thread as coursework (defense in depth; SOP handles those)
+  if (q[0].class !== 'QUESTION' || q[0].status === 'quarantined') {
+    return res.status(409).json({ error: 'This thread is flagged. Handle it per the SAFETY-SOP, not as a coursework answer.' });
+  }
+  // Jay's reply is parent-visible only if the thread is a clean QUESTION with NO held reply anywhere.
+  const { rows: heldRep } = await query(`SELECT 1 FROM question_replies WHERE question_id=$1 AND class <> 'QUESTION' LIMIT 1`, [id]);
+  const pv = q[0].class === 'QUESTION' && q[0].status !== 'quarantined' && heldRep.length === 0;
+  await tx(async (client) => {
+    await client.query(`INSERT INTO question_replies (question_id, author_id, body, class, parent_visible) VALUES ($1,$2,$3,'QUESTION',$4)`, [id, req.user.id, body, pv]);
+    await client.query(`UPDATE questions SET status='answered', first_response_at=COALESCE(first_response_at,now()), answered_at=now() WHERE id=$1`, [id]);
+  });
+  await notify(q[0].student_id, 'question_answered', 'Jay answered your question.', '#/questions');
+  await logEvent({ student_id: q[0].student_id, actor_id: req.user.id, type: 'question_answered', entity_type: 'question', entity_id: id });
+  res.json({ ok: true });
+}));
+
+// parent sees QUESTION-class threads only, for a linked teen
+app.get('/api/parent/children/:id/questions', authRequired(), requireRole('parent'), h(async (req, res) => {
+  const sid = parseInt(req.params.id, 10);
+  if (!(await parentOf(req.user.id, sid))) return res.status(403).json({ error: 'not your teen' });
+  const { rows: qs } = await query(`SELECT id, body, created_at FROM questions WHERE student_id=$1 AND parent_visible=TRUE AND class='QUESTION' ORDER BY created_at DESC`, [sid]);
+  const threads = [];
+  for (const q of qs) {
+    const { rows: reps } = await query(`SELECT author_id, body FROM question_replies WHERE question_id=$1 AND parent_visible=TRUE AND class='QUESTION' ORDER BY created_at`, [q.id]);
+    threads.push({ id: q.id, body: q.body, created_at: q.created_at, replies: reps.map((r) => ({ body: r.body })) });
+  }
+  res.json({ threads, note: 'You see coursework questions and answers. Anything a safety check set aside is not shown here.' });
+}));
+
 // one-click digest unsubscribe (HMAC, plan 3.2). Matches digest.js token.
 app.get('/unsubscribe', h(async (req, res) => {
   const p = parseInt(req.query.p, 10);
@@ -980,7 +1166,10 @@ app.get(/^\/(?!api|health|version|webhooks).*/, (req, res) => {
 app.use((err, req, res, next) => {
   if (err && err.httpStatus) return res.status(err.httpStatus).json({ error: err.clientMsg || 'conflict' });
   console.error('[error]', err.message);
-  res.status(500).json({ error: 'server error' });
+  const bodyOut = { error: 'server error' };
+  // the question channel never dead-ends, even on an unexpected error (SOP §5)
+  if (req.path && req.path.startsWith('/api/questions')) bodyOut.crisis_lines = classifier.CRISIS_LINES;
+  res.status(500).json(bodyOut);
 });
 
 const PORT = process.env.PORT || 3000;

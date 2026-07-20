@@ -155,7 +155,7 @@ async function screenHome(){
       `<div class="station" onclick="location.hash='#/chapter/${esc(c.stable_key)}'">
         <div><strong>${c.number}. ${esc(c.title)}</strong><div class="muted">${esc(c.walk_away||'')}</div></div>
         <span class="pill">&rsaquo;</span></div>`).join('')}
-    <p class="foot"><a href="#/checkpoints">Parent sign-offs</a> &middot; <a href="#/what-parent-sees">What your parent can see</a> &middot; <a href="#/privacy">Privacy</a></p>
+    <p class="foot"><a href="#/questions">Ask Jay</a> &middot; <a href="#/checkpoints">Parent sign-offs</a> &middot; <a href="#/what-parent-sees">What your parent can see</a> &middot; <a href="#/privacy">Privacy</a></p>
     <p class="foot">Entrepreneurship coaching and education, not financial, tax, legal, or investment advice.</p>`;
   renderTabs('home');
 }
@@ -233,6 +233,7 @@ async function doPark(key){
 async function screenAdmin(){
   const { students } = await api('/api/admin/students');
   app.innerHTML = `<h1>Cohort</h1>
+    <p class="muted"><a href="#/review">Review queue</a> &middot; <a href="#/inbox">Question inbox</a></p>
     <div class="card">
       <label>Create a demo student (P0)</label>
       <input id="ns_first" placeholder="First name">
@@ -301,8 +302,11 @@ async function route(){
     if(me.role==='admin'){
       const sd = hash.match(/^#\/admin\/student\/(\d+)$/);
       const rv = hash.match(/^#\/review\/(\d+)$/);
+      const it = hash.match(/^#\/inbox\/(\d+)$/);
       if(hash==='#/review') return screenReviewQueue();
       if(rv) return screenReviewArtifact(rv[1]);
+      if(hash==='#/inbox') return screenInbox();
+      if(it) return screenInboxThread(it[1]);
       if(sd) return screenAdminStudent(sd[1]);
       return screenAdmin();
     }
@@ -320,6 +324,7 @@ async function route(){
     if(me.link_pending) return screenLinkPending();
     if(hash==='#/score') return screenScore();
     if(hash==='#/checkpoints') return screenCheckpoints();
+    if(hash==='#/questions') return screenQuestions();
     if(hash==='#/what-parent-sees') return screenWhatParentSees();
     if(!me.has_onboarded && hash!=='#/onboarding'){ location.hash='#/onboarding'; return; }
     if(hash==='#/onboarding') return screenOnboarding();

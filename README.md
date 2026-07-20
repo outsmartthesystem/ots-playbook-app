@@ -30,7 +30,17 @@ This README covers running the code. When a decision changes, update the plan fi
   logic, HMAC unsubscribe, DIGEST_DRY-safe) and `reminders.js` (scoreboard reminder + one nudge, approval
   nudges, `sent`-table dedup) as Render cron jobs. Admin cohort v2 (attention score, flags, queue tiles).
   Privacy page. Adversarially reviewed (10 findings, all fixed).
-- P3a (question channel + safety core) / P3b (cockpit + Stripe provisioning): not built.
+- **P3a (question channel + safety core): built, and HARD-GATED OFF.** The chapter-anchored Q&A
+  channel with the ported 7-class classifier (`lib/classifier.js`: fail-closed to held, a keyword
+  safety-net that can only escalate, model call when `CLASSIFIER_API_KEY` is set), parent-visible only
+  on class QUESTION, responder alerts that carry no quotes, quarantine-read audit logging, rate limits
+  and crisis lines on every error, and the admin inbox. `docs/SAFETY-SOP.md` forked with the routing
+  table, the no-DM ban, and preserve-not-purge. `QUESTIONS_ENABLED` stays 0 until the red-team harness
+  passes against the live classifier AND counsel signs off (D6). The offline red-team harness
+  (`test/redteam.test.js`) proves the fail-closed and keyword-net properties with no database.
+  Adversarially reviewed (10 findings, all fixed, incl. a CRITICAL thread-visibility leak on a serious
+  reply). Tests: 17 passing.
+- P3b (cockpit + Stripe provisioning): not built.
 - P4 (AI copilot): deferred per D4 until after P3b.
 
 ## Locked decisions (2026-07-20)

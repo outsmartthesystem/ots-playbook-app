@@ -303,6 +303,60 @@ const STATEMENTS = [
     UNIQUE (student_id, week_start)
   )`,
 
+  // --- P3a: the question channel (stays behind QUESTIONS_ENABLED) ---
+  `CREATE TABLE IF NOT EXISTS questions (
+    id SERIAL PRIMARY KEY,
+    student_id INT NOT NULL REFERENCES users(id),
+    chapter_id INT REFERENCES chapters(id),
+    step_id INT REFERENCES steps(id),
+    body TEXT NOT NULL CHECK (length(body) <= 2000),
+    artifact_snapshot_version INT,
+    qtype TEXT,                                   -- stuck | tool | is_this_honest | scared_to_send | other
+    class TEXT NOT NULL DEFAULT 'PENDING',        -- routing table in lib/classifier.js
+    parent_visible BOOLEAN NOT NULL DEFAULT FALSE,-- TRUE only when class = QUESTION
+    status TEXT NOT NULL DEFAULT 'open'
+      CHECK (status IN ('open','answered','closed','quarantined')),
+    first_response_at TIMESTAMPTZ,
+    answered_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS question_replies (
+    id SERIAL PRIMARY KEY,
+    question_id INT NOT NULL REFERENCES questions(id),
+    author_id INT REFERENCES users(id),
+    body TEXT NOT NULL,
+    class TEXT NOT NULL DEFAULT 'PENDING',
+    parent_visible BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()  -- immutable; a correction is a new reply
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS canned_answers (
+    id SERIAL PRIMARY KEY,
+    chapter_id INT REFERENCES chapters(id),
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    times_used INT NOT NULL DEFAULT 0
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS safety_events (
+    id SERIAL PRIMARY KEY,
+    question_id INT REFERENCES questions(id),
+    reply_id INT REFERENCES question_replies(id),
+    class TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    responder_notified_at TIMESTAMPTZ,
+    acked_at TIMESTAMPTZ,
+    ack_by INT REFERENCES users(id),
+    outcome_note_redacted TEXT,                   -- NEVER a student quote
+    retention_hold BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_questions_student ON questions(student_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_replies_question ON question_replies(question_id)`,
+
   // helpful indexes
   `CREATE INDEX IF NOT EXISTS idx_approvals_student ON approvals(student_id)`,
   `CREATE INDEX IF NOT EXISTS idx_approvals_parent ON approvals(parent_id)`,
@@ -348,6 +402,16 @@ async function migrate() {
     for (const [title, body] of snippets) {
       await query(`INSERT INTO review_snippets (title, body) VALUES ($1, $2)`, [title, body]);
     }
+  }
+  // seed a few canned answers for the question inbox (plan P3a task 4)
+  const { rows: ca } = await query(`SELECT COUNT(*)::int AS n FROM canned_answers`);
+  if (ca[0].n === 0) {
+    const answers = [
+      ['Point it at a real quote', 'Good question. Open your VoC sheet and pick the one real quote that fits. If none fits yet, flag it "no source yet" and keep going.'],
+      ['Start with one conversation', 'You do not need the whole thing figured out. Line up one real conversation this week. That is the next move.'],
+      ['That is honest', 'Yes, that is the honest way to do it. Ship it.'],
+    ];
+    for (const [title, body] of answers) await query(`INSERT INTO canned_answers (title, body) VALUES ($1,$2)`, [title, body]);
   }
   return STATEMENTS.length;
 }

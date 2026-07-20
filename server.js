@@ -279,14 +279,12 @@ app.get('/api/me/next', authRequired(), requireRole('student'), h(async (req, re
 app.get('/api/admin/students', authRequired(), requireRole('admin'), h(async (req, res) => {
   const { rows } = await query(
     `SELECT u.id, u.first_name, u.last_initial, u.username, u.account_state,
-            MAX(e.created_at) AS last_activity,
-            COUNT(p.*) FILTER (WHERE p.status='done') AS steps_done,
-            COUNT(p.*) FILTER (WHERE p.status='parked') AS steps_parked
+            (SELECT MAX(created_at) FROM events   WHERE student_id = u.id) AS last_activity,
+            (SELECT COUNT(*) FROM progress WHERE student_id = u.id AND status='done')   AS steps_done,
+            (SELECT COUNT(*) FROM progress WHERE student_id = u.id AND status='parked') AS steps_parked
        FROM users u
-       LEFT JOIN events e ON e.student_id = u.id
-       LEFT JOIN progress p ON p.student_id = u.id
       WHERE u.role = 'student' AND u.deleted_at IS NULL
-      GROUP BY u.id ORDER BY last_activity DESC NULLS LAST`
+      ORDER BY last_activity DESC NULLS LAST`
   );
   res.json({ students: rows });
 }));

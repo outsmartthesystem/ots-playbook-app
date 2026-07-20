@@ -1,0 +1,28 @@
+{
+  "name": "ots-playbook-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Teen Entrepreneur App: the Teen Business Playbook as a three-role product (admin, student, parent). PLAN: ots-content/strategy/teen-entrepreneur-app-plan-2026-07-20.md",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "migrate": "node migrate.js",
+    "sync-content": "node sync-content.js",
+    "ingest": "node ingest.js",
+    "createAdmin": "node createAdmin.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "compression": "^1.7.5",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.20.0",
+    "resend": "^6.12.2"
+  }
+}

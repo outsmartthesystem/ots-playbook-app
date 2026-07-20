@@ -1,0 +1,10 @@
+{
+  "name": "OTS Playbook",
+  "short_name": "Playbook",
+  "description": "Build your real business, one chapter at a time.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6fa",
+  "theme_color": "#1f4e6b",
+  "icons": []
+}

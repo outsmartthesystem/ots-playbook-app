@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OTS Playbook</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<style>
+  :root{ --ink:#1c2330; --muted:#55607a; --accent:#1f4e6b; --accent2:#c2703d;
+    --rule:#d9dee8; --panel:#f4f6fa; --ok:#1c7c54; --bg:#fff; }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; background:var(--panel); color:var(--ink);
+    font-family:"Segoe UI",system-ui,Arial,sans-serif; font-size:16px; line-height:1.5; }
+  a{ color:var(--accent); }
+  #app{ max-width:680px; margin:0 auto; min-height:100vh; background:var(--bg);
+    padding:16px 16px 92px; }
+  .beta{ background:var(--accent2); color:#fff; text-align:center; font-size:12px; padding:4px; }
+  h1{ font-size:22px; color:var(--accent); margin:.2em 0 .4em; }
+  h2{ font-size:17px; color:var(--accent); margin:1em 0 .3em; }
+  .muted{ color:var(--muted); font-size:14px; }
+  .card{ border:1px solid var(--rule); border-radius:10px; padding:16px; margin:12px 0; background:#fff; }
+  .hero{ background:var(--accent); color:#fff; border:0; }
+  .hero .muted{ color:#cdd9e4; }
+  button, .btn{ display:inline-block; background:var(--accent); color:#fff; border:0; border-radius:8px;
+    padding:12px 16px; font-size:16px; font-weight:600; cursor:pointer; text-decoration:none; }
+  button.ghost, .btn.ghost{ background:#fff; color:var(--accent); border:1px solid var(--accent); }
+  button.wide{ width:100%; }
+  input, textarea{ width:100%; padding:12px; border:1px solid var(--rule); border-radius:8px;
+    font-size:16px; font-family:inherit; margin:6px 0; }
+  label{ font-size:13px; color:var(--muted); font-weight:600; }
+  .pill{ display:inline-block; font-size:11px; padding:2px 8px; border-radius:99px; border:1px solid var(--rule); color:var(--muted); }
+  .pill.done{ background:#e6f4ec; color:var(--ok); border-color:#bfe3cf; }
+  .pill.parked{ background:#fdf0e6; color:var(--accent2); border-color:#f0d3bd; }
+  .pill.in_progress{ background:#eef2f8; color:var(--accent); border-color:#cdd9e4; }
+  .station{ display:flex; justify-content:space-between; align-items:center; gap:8px;
+    padding:12px; border:1px solid var(--rule); border-radius:8px; margin:8px 0; cursor:pointer; background:#fff; }
+  .station:hover{ border-color:var(--accent); }
+  pre{ background:var(--panel); border:1px solid var(--rule); border-radius:6px; padding:12px;
+    overflow:auto; font-family:Consolas,monospace; font-size:13px; white-space:pre-wrap; }
+  .tabs{ position:fixed; bottom:0; left:0; right:0; display:flex; background:#fff;
+    border-top:1px solid var(--rule); max-width:680px; margin:0 auto; }
+  .tabs a{ flex:1; text-align:center; padding:10px; font-size:12px; color:var(--muted); text-decoration:none; }
+  .tabs a.active{ color:var(--accent); font-weight:700; }
+  .foot{ font-size:11px; color:var(--muted); text-align:center; margin:24px 0 0; }
+  .err{ color:#b23b3b; font-size:14px; }
+  .row{ display:flex; gap:8px; align-items:center; }
+  .grow{ flex:1; }
+</style>
+</head>
+<body>
+<div id="beta"></div>
+<div id="app"></div>
+<nav id="tabs"></nav>
+
+<script>
+const API = '';
+let TOKEN = localStorage.getItem('ots_token') || '';
+let ME = null;
+const app = document.getElementById('app');
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// tiny markdown-lite: bold, paragraphs, fenced code, bullet lists. Enough for P0.
+function md(t){
+  if(!t) return '';
+  const blocks = String(t).replace(/\r\n/g,'\n').split(/\n{2,}/);
+  return blocks.map(b=>{
+    if(/^```/.test(b)){ return '<pre>'+esc(b.replace(/^```.*\n?|\n?```$/g,''))+'</pre>'; }
+    if(/^\s*[-*]\s+/.test(b)){
+      const items=b.split('\n').filter(l=>l.trim()).map(l=>'<li>'+inline(l.replace(/^\s*[-*]\s+/,''))+'</li>').join('');
+      return '<ul>'+items+'</ul>';
+    }
+    return '<p>'+inline(esc(b))+'</p>';
+  }).join('');
+}
+function inline(s){ return String(s).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>'); }
+
+async function api(path, opts={}){
+  const headers = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+  if(TOKEN) headers['Authorization'] = 'Bearer '+TOKEN;
+  const res = await fetch(API+path, Object.assign({}, opts, { headers }));
+  let data = {}; try{ data = await res.json(); }catch(_){}
+  if(!res.ok) throw new Error(data.error || ('HTTP '+res.status));
+  return data;
+}
+
+function setToken(t){ TOKEN=t; if(t) localStorage.setItem('ots_token',t); else localStorage.removeItem('ots_token'); }
+function logout(){ setToken(''); ME=null; location.hash='#/login'; }
+
+// ---------- render helpers ----------
+function statusPill(s){ return '<span class="pill '+s+'">'+esc(s.replace('_',' '))+'</span>'; }
+
+async function renderBeta(){
+  try{ const v = await api('/version');
+    document.getElementById('beta').innerHTML = v.launch_mode==='production' ? '' :
+      '<div class="beta">BETA (preview mode). Real students launch after counsel sign-off.</div>';
+  }catch(_){}
+}
+
+// ---------- screens ----------
+function screenLogin(){
+  app.innerHTML = `<h1>OTS Playbook</h1>
+    <p class="muted">Log in to build your business, one chapter at a time.</p>
+    <div class="card">
+      <label>Email or username</label><input id="li_id" autocomplete="username">
+      <label>Password</label><input id="li_pw" type="password" autocomplete="current-password">
+      <p id="li_err" class="err"></p>
+      <button class="wide" onclick="doLogin()">Log in</button>
+    </div>
+    <p class="muted">Have a claim link from a parent or from Jay? Open it to set your password.</p>`;
+  renderTabs();
+}
+async function doLogin(){
+  const id=document.getElementById('li_id').value.trim(), pw=document.getElementById('li_pw').value;
+  try{
+    const idIsEmail = id.includes('@');
+    const data = await api('/api/login',{method:'POST',body:JSON.stringify(idIsEmail?{email:id,password:pw}:{username:id,password:pw})});
+    setToken(data.token); ME=data.user; location.hash = ME.role==='admin' ? '#/admin' : '#/';
+  }catch(e){ document.getElementById('li_err').textContent=e.message; }
+}
+
+function screenClaim(token){
+  app.innerHTML = `<h1>Set your password</h1>
+    <p class="muted">Welcome. Pick a password (8+ characters) to start.</p>
+    <div class="card">
+      <label>New password</label><input id="cl_pw" type="password" autocomplete="new-password">
+      <p id="cl_err" class="err"></p>
+      <button class="wide" onclick="doClaim('${esc(token)}')">Start</button>
+    </div>`;
+  renderTabs();
+}
+async function doClaim(token){
+  const pw=document.getElementById('cl_pw').value;
+  try{ const data=await api('/api/claim',{method:'POST',body:JSON.stringify({token,password:pw})});
+    setToken(data.token); ME=data.user; location.hash='#/';
+  }catch(e){ document.getElementById('cl_err').textContent=e.message; }
+}
+
+async function screenHome(){
+  const [next, chapters] = await Promise.all([api('/api/me/next'), api('/api/chapters')]);
+  const cur = next.next;
+  app.innerHTML = `
+    <div class="muted">Hi ${esc(ME.first_name||'')}. ${next.done} steps done${next.parked?`, ${next.parked} parked`:''}.</div>
+    ${cur ? `<div class="card hero">
+        <div class="muted">You are here</div>
+        <div style="font-size:15px;margin:4px 0">Chapter ${cur.number}: ${esc(cur.chapter_title)}</div>
+        <h1 style="color:#fff;margin:.2em 0">Next move</h1>
+        <div style="margin:6px 0 14px">${esc(cur.title)}</div>
+        <a class="btn ghost" href="#/step/${esc(cur.stable_key)}" style="background:#fff">Do this move</a>
+      </div>`
+      : `<div class="card hero"><h1 style="color:#fff">You are all caught up.</h1>
+         <div class="muted">Every step is done or parked. Slow and real beats fast and fake.</div></div>`}
+    <h2>Your chapters</h2>
+    ${chapters.chapters.filter(c=>c.number>=1).slice(0,3).map(c=>
+      `<div class="station" onclick="location.hash='#/chapter/${esc(c.stable_key)}'">
+        <div><strong>${c.number}. ${esc(c.title)}</strong><div class="muted">${esc(c.walk_away||'')}</div></div>
+        <span class="pill">&rsaquo;</span></div>`).join('')}
+    <p class="foot">Entrepreneurship coaching and education, not financial, tax, legal, or investment advice.</p>`;
+  renderTabs('home');
+}
+
+async function screenPlaybook(){
+  const { chapters } = await api('/api/chapters');
+  app.innerHTML = `<h1>The playbook</h1>
+    <p class="muted">Twelve chapters. Each one produces a real business document.</p>
+    ${chapters.filter(c=>c.number>=1).map(c=>
+      `<div class="station" onclick="location.hash='#/chapter/${esc(c.stable_key)}'">
+        <div><strong>${c.number}. ${esc(c.title)}</strong>
+          <div class="muted">${esc(c.walk_away||'')}</div>
+          <div class="muted">${esc(c.rough_time||'')}</div></div>
+        <span class="pill">&rsaquo;</span></div>`).join('')}
+    <p class="foot">Read in order the first time. Do the move at the end of each chapter before the next.</p>`;
+  renderTabs('playbook');
+}
+
+async function screenChapter(key){
+  const { chapter, steps, checklist } = await api('/api/chapters/'+key);
+  app.innerHTML = `<a class="muted" href="#/playbook">&lsaquo; All chapters</a>
+    <h1>${chapter.number}. ${esc(chapter.title)}</h1>
+    <p class="muted"><strong>You walk away with:</strong> ${esc(chapter.walk_away||'')}</p>
+    <p class="muted">${esc(chapter.rough_time||'')}</p>
+    <h2>Steps</h2>
+    ${steps.map(s=>`<div class="station" onclick="location.hash='#/step/${esc(s.stable_key)}'">
+      <div><strong>${esc(s.title)}</strong> <span class="muted">(${esc(s.kind)})</span></div>
+      ${statusPill(s.status)}</div>`).join('')}
+    ${checklist.length?`<h2>Check your work</h2><div class="card">${checklist.map(ci=>`<div>&#9633; ${esc(ci.text)}</div>`).join('')}</div>`:''}`;
+  renderTabs('playbook');
+}
+
+async function screenStep(key){
+  const { step, templates, progress } = await api('/api/steps/'+key);
+  const st = progress ? progress.status : 'not_started';
+  app.innerHTML = `<a class="muted" href="#/chapter/${esc(step.chapter_key)}">&lsaquo; Chapter ${step.chapter_number}</a>
+    <h1>${esc(step.title)}</h1>
+    <div class="muted">Chapter ${step.chapter_number}: ${esc(step.chapter_title)} ${statusPill(st)}</div>
+    <div class="card">${md(step.teach_md)}</div>
+    ${step.jay_md?`<h2>How Jay did it</h2><div class="card">${md(step.jay_md)}</div>`:''}
+    ${templates.map(t=>`<h2>${esc(t.title||'Copy and adapt')}</h2><pre>${esc(t.body)}</pre>`).join('')}
+    ${step.now_you_md?`<h2>Your move</h2><div class="card">${md(step.now_you_md)}</div>`:''}
+    <div class="card">
+      <label>What did you actually do? (one sentence)</label>
+      <textarea id="dn" rows="2" placeholder="I ...">${esc(progress&&progress.done_note||'')}</textarea>
+      <div class="row">
+        <button class="grow" onclick="markDone('${esc(key)}')">Mark done</button>
+        <button class="ghost" onclick="showPark('${esc(key)}')">I'm stuck</button>
+      </div>
+      <div id="park"></div>
+      <p id="st_err" class="err"></p>
+    </div>`;
+  renderTabs('playbook');
+}
+async function markDone(key){
+  const note=document.getElementById('dn').value.trim();
+  try{ await api('/api/steps/'+key+'/done',{method:'POST',body:JSON.stringify({done_note:note})});
+    history.back();
+  }catch(e){ document.getElementById('st_err').textContent=e.message; }
+}
+function showPark(key){
+  document.getElementById('park').innerHTML =
+    `<label>What is blocking you? (Parked is honest. Jay will see this.)</label>
+     <textarea id="pr" rows="2"></textarea>
+     <button class="ghost" onclick="doPark('${esc(key)}')">Park this step</button>`;
+}
+async function doPark(key){
+  const reason=document.getElementById('pr').value.trim();
+  try{ await api('/api/steps/'+key+'/park',{method:'POST',body:JSON.stringify({parked_reason:reason})});
+    history.back();
+  }catch(e){ document.getElementById('st_err').textContent=e.message; }
+}
+
+// ---------- admin ----------
+async function screenAdmin(){
+  const { students } = await api('/api/admin/students');
+  app.innerHTML = `<h1>Cohort</h1>
+    <div class="card">
+      <label>Create a demo student (P0)</label>
+      <input id="ns_first" placeholder="First name">
+      <input id="ns_user" placeholder="username (optional, for username login)">
+      <button onclick="createStudent()">Create + get claim link</button>
+      <div id="ns_out"></div>
+    </div>
+    <h2>Students (${students.length})</h2>
+    ${students.length? students.map(s=>`<div class="station" onclick="location.hash='#/admin/student/${s.id}'">
+      <div><strong>${esc(s.first_name)} ${esc(s.last_initial||'')}</strong>
+        <div class="muted">${s.steps_done} done, ${s.steps_parked} parked. Last: ${s.last_activity?new Date(s.last_activity).toLocaleString():'never'}</div></div>
+      <span class="pill">${esc(s.account_state)}</span></div>`).join('') : '<p class="muted">No students yet.</p>'}
+    <p class="foot"><a href="#" onclick="logout();return false">Log out</a></p>`;
+  renderTabs();
+}
+async function createStudent(){
+  const first=document.getElementById('ns_first').value.trim();
+  const username=document.getElementById('ns_user').value.trim();
+  try{ const d=await api('/api/admin/students',{method:'POST',body:JSON.stringify({first_name:first,username})});
+    document.getElementById('ns_out').innerHTML=`<p class="muted">Claim link (hand to the student):</p><pre>${esc(d.claim_url)}</pre>`;
+  }catch(e){ document.getElementById('ns_out').innerHTML='<p class="err">'+esc(e.message)+'</p>'; }
+}
+async function screenAdminStudent(id){
+  const { student, timeline } = await api('/api/admin/students/'+id);
+  app.innerHTML = `<a class="muted" href="#/admin">&lsaquo; Cohort</a>
+    <h1>${esc(student.first_name)} ${esc(student.last_initial||'')}</h1>
+    <div class="muted">${esc(student.account_state)}</div>
+    <h2>Activity</h2>
+    ${timeline.length? timeline.map(t=>`<div class="card">
+      <div class="row"><strong class="grow">Ch ${t.chapter_number}: ${esc(t.title)}</strong>${statusPill(t.status)}</div>
+      ${t.done_note?`<div class="muted">Did: ${esc(t.done_note)}</div>`:''}
+      ${t.parked_reason?`<div class="muted">Parked: ${esc(t.parked_reason)}</div>`:''}
+    </div>`).join('') : '<p class="muted">No activity yet.</p>'}`;
+  renderTabs();
+}
+
+// ---------- tabs + router ----------
+function renderTabs(active){
+  const t=document.getElementById('tabs');
+  if(!ME || ME.role!=='student'){ t.innerHTML=''; return; }
+  const tab=(h,l,k)=>`<a class="${active===k?'active':''}" href="${h}">${l}</a>`;
+  t.innerHTML = `<div class="tabs" style="position:fixed">
+    ${tab('#/','Home','home')}${tab('#/playbook','Playbook','playbook')}
+    <a href="#" onclick="logout();return false">Log out</a></div>`;
+}
+
+async function ensureMe(){
+  if(ME) return ME;
+  if(!TOKEN) return null;
+  try{ const d=await api('/api/me'); ME=d.user; return ME; }catch(_){ setToken(''); return null; }
+}
+
+async function route(){
+  const hash = location.hash || '#/';
+  const claim = hash.match(/^#\/claim\/(.+)$/);
+  if(claim){ screenClaim(claim[1]); return; }
+  if(hash==='#/login'){ screenLogin(); return; }
+
+  const me = await ensureMe();
+  if(!me){ screenLogin(); return; }
+
+  try{
+    if(me.role==='admin'){
+      const sd = hash.match(/^#\/admin\/student\/(\d+)$/);
+      if(sd) return screenAdminStudent(sd[1]);
+      return screenAdmin();
+    }
+    // student
+    const ch = hash.match(/^#\/chapter\/(.+)$/);
+    const stp = hash.match(/^#\/step\/(.+)$/);
+    if(ch) return screenChapter(ch[1]);
+    if(stp) return screenStep(stp[1]);
+    if(hash==='#/playbook') return screenPlaybook();
+    return screenHome();
+  }catch(e){
+    app.innerHTML = '<div class="card"><p class="err">'+esc(e.message)+'</p><button onclick="location.reload()">Reload</button></div>';
+  }
+}
+
+window.addEventListener('hashchange', route);
+window.addEventListener('load', async ()=>{ await renderBeta(); route(); });
+</script>
+</body>
+</html>

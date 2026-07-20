@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "notes": "Maps ingested playbook steps to kinds, artifacts, and gates (plan 4.1/4.2). Keys are 2-digit chapter numbers. Steps default to default_step_kind unless overridden by position. P0 ships chapters 00-03 fully mapped; 04-12 default to 'read' until P1 gives each its structured artifact (their artifact_kind is fixed here now so P1 need not re-decide).",
+  "chapters": {
+    "00": { "artifact_kind": null, "default_step_kind": "read", "step_kind_overrides": {} },
+    "01": {
+      "artifact_kind": "voc_sheet",
+      "default_step_kind": "artifact",
+      "step_kind_overrides": { "1": "read", "5": "action", "9": "read" },
+      "action_evidence": { "5": ["interviews_done", "dates"] },
+      "presence_gate": {
+        "kind": "one_per_bucket",
+        "buckets": ["fears", "frustrations", "dream", "exact_words", "objections", "price"],
+        "note": "D13: VoC cannot reach submitted until each bucket holds >= 1 quote."
+      }
+    },
+    "02": {
+      "artifact_kind": "brandscript",
+      "default_step_kind": "artifact",
+      "step_kind_overrides": { "1": "read", "2": "read" }
+    },
+    "03": {
+      "artifact_kind": "offer_truth_file",
+      "default_step_kind": "artifact",
+      "step_kind_overrides": { "1": "read" }
+    },
+    "04": { "artifact_kind": "no_brainer_stack", "default_step_kind": "read", "step_kind_overrides": {} },
+    "05": { "artifact_kind": "website_record", "default_step_kind": "read", "step_kind_overrides": {} },
+    "06": { "artifact_kind": "lead_capture_kit", "default_step_kind": "read", "step_kind_overrides": {} },
+    "07": { "artifact_kind": "warm_list", "default_step_kind": "read", "step_kind_overrides": {} },
+    "08": { "artifact_kind": "content_loop", "default_step_kind": "read", "step_kind_overrides": {} },
+    "09": { "artifact_kind": "automation_kit", "default_step_kind": "read", "step_kind_overrides": {} },
+    "10": { "artifact_kind": "scoreboard_setup", "default_step_kind": "read", "step_kind_overrides": {} },
+    "11": { "artifact_kind": "rules_file", "default_step_kind": "read", "step_kind_overrides": {} },
+    "12": { "artifact_kind": "standing_brief", "default_step_kind": "read", "step_kind_overrides": {} }
+  }
+}

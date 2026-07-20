@@ -1,0 +1,39 @@
+# Render blueprint for ots-playbook-app. Mirrors the outsmart-app house pattern.
+# NEW service, NEW database, NEW subdomain (hustle.outsmartthesystem.org, D2).
+# Does not touch outsmart-app or ots-teen-agent infra.
+services:
+  - type: web
+    name: ots-playbook-app
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ots-playbook-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+      - key: LAUNCH_MODE
+        value: preview
+      - key: QUESTIONS_ENABLED
+        value: "0"
+      - key: DIGEST_DRY
+        value: "1"
+      # Remaining secrets (RESEND_API_KEY, ADMIN_*, COUNSEL_SIGNOFF_*, CLASSIFIER_*,
+      # STRIPE_WEBHOOK_SECRET, APP_URL, FROM_EMAIL, SAFETY_ALERT_*) are set in the Render dashboard.
+
+  # Cron jobs land in later phases (digest.js P2, adminDigest.js P2, reminders.js P2).
+
+databases:
+  - name: ots-playbook-db
+    plan: basic-256mb
+    region: oregon
+    postgresMajorVersion: "16"

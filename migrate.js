@@ -259,7 +259,54 @@ const STATEMENTS = [
     times_used INT NOT NULL DEFAULT 0
   )`,
 
+  // --- P2: the family layer ---
+  `CREATE TABLE IF NOT EXISTS approvals (
+    id SERIAL PRIMARY KEY,
+    checkpoint_key TEXT NOT NULL,
+    student_id INT NOT NULL REFERENCES users(id),
+    parent_id INT REFERENCES users(id),
+    subject_ref TEXT,
+    status TEXT NOT NULL DEFAULT 'requested'
+      CHECK (status IN ('requested','approved','declined','revoked')),
+    note TEXT,
+    release_reference TEXT,                       -- D11: text reference to a signed release; no file upload v1
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at TIMESTAMPTZ
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS approval_events (
+    id SERIAL PRIMARY KEY,
+    approval_id INT NOT NULL REFERENCES approvals(id),
+    actor_id INT REFERENCES users(id),
+    actor_role TEXT,
+    event TEXT NOT NULL,                           -- requested | viewed | approved | declined | revoked | reminded
+    note TEXT,
+    ip TEXT,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()  -- append-only, never UPDATE/DELETE
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS scoreboard_weeks (
+    id SERIAL PRIMARY KEY,
+    student_id INT NOT NULL REFERENCES users(id),
+    week_start DATE NOT NULL,
+    front_door TEXT,
+    clicks INT, clicks_unknown BOOLEAN NOT NULL DEFAULT FALSE,
+    leads INT, leads_unknown BOOLEAN NOT NULL DEFAULT FALSE,
+    paid INT, paid_unknown BOOLEAN NOT NULL DEFAULT FALSE,
+    revenue_cents INT, revenue_unknown BOOLEAN NOT NULL DEFAULT FALSE,
+    posts_shipped INT, best_post TEXT, hand_counted_extras TEXT,
+    leak TEXT NOT NULL DEFAULT '', learning TEXT NOT NULL DEFAULT '', dial_in TEXT NOT NULL DEFAULT '',
+    filled_late BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (student_id, week_start)
+  )`,
+
   // helpful indexes
+  `CREATE INDEX IF NOT EXISTS idx_approvals_student ON approvals(student_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_approvals_parent ON approvals(parent_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_scoreboard_student ON scoreboard_weeks(student_id)`,
   `CREATE INDEX IF NOT EXISTS idx_artifacts_student ON artifacts(student_id)`,
   `CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status)`,
   `CREATE INDEX IF NOT EXISTS idx_artifact_versions_artifact ON artifact_versions(artifact_id)`,

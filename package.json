@@ -13,6 +13,8 @@
     "sync-content": "node sync-content.js",
     "ingest": "node ingest.js",
     "createAdmin": "node createAdmin.js",
+    "digest": "node digest.js",
+    "reminders": "node reminders.js",
     "test": "node --test"
   },
   "dependencies": {

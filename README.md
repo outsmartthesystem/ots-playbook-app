@@ -20,7 +20,16 @@ This README covers running the code. When a decision changes, update the plan fi
   a gated `/api/publish`; artifact-gated progression; three-promises onboarding; Elena's read-only
   demo binder. Adversarially reviewed (18 findings, all fixed, incl. a critical un-verify bug). The
   honesty-engine logic has unit tests (`npm test`, 12 passing, no database needed).
-- P2 (parents + approvals + digests + scoreboard): not built.
+- **P2 (family layer): built.** Parent accounts (setup-link + four consent boxes), "Add your teen"
+  with the 13+ age gate, the link-pending hold for unlinked minors (enforced in the per-request auth
+  check). Parent dashboard (documents, scoreboard trend, action-needed), read-only with no write path
+  into student work. The 12 approval checkpoints (request / approve / decline / revoke, append-only
+  events incl. "viewed"), with artifact verify blocked until the required parent sign-off is approved.
+  The Chapter 10 scoreboard loop (unknown-vs-zero distinction, skipped weeks shown as gaps, review-day
+  home takeover). `digest.js` weekly parent email (four sections, Ask-tonight bank, quiet-week D10
+  logic, HMAC unsubscribe, DIGEST_DRY-safe) and `reminders.js` (scoreboard reminder + one nudge, approval
+  nudges, `sent`-table dedup) as Render cron jobs. Admin cohort v2 (attention score, flags, queue tiles).
+  Privacy page. Adversarially reviewed (10 findings, all fixed).
 - P3a (question channel + safety core) / P3b (cockpit + Stripe provisioning): not built.
 - P4 (AI copilot): deferred per D4 until after P3b.
 

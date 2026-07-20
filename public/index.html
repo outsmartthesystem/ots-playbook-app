@@ -155,6 +155,7 @@ async function screenHome(){
       `<div class="station" onclick="location.hash='#/chapter/${esc(c.stable_key)}'">
         <div><strong>${c.number}. ${esc(c.title)}</strong><div class="muted">${esc(c.walk_away||'')}</div></div>
         <span class="pill">&rsaquo;</span></div>`).join('')}
+    <p class="foot"><a href="#/checkpoints">Parent sign-offs</a> &middot; <a href="#/what-parent-sees">What your parent can see</a> &middot; <a href="#/privacy">Privacy</a></p>
     <p class="foot">Entrepreneurship coaching and education, not financial, tax, legal, or investment advice.</p>`;
   renderTabs('home');
 }
@@ -274,7 +275,7 @@ function renderTabs(active){
   if(!ME || ME.role!=='student'){ t.innerHTML=''; return; }
   const tab=(h,l,k)=>`<a class="${active===k?'active':''}" href="${h}">${l}</a>`;
   t.innerHTML = `<div class="tabs" style="position:fixed">
-    ${tab('#/','Home','home')}${tab('#/playbook','Playbook','playbook')}${tab('#/binder','Binder','binder')}
+    ${tab('#/','Home','home')}${tab('#/playbook','Playbook','playbook')}${tab('#/binder','Binder','binder')}${tab('#/score','Score','score')}
     <a href="#" onclick="logout();return false" style="flex:1;text-align:center;padding:10px;font-size:12px;color:var(--muted)">Log out</a></div>`;
 }
 
@@ -288,7 +289,10 @@ async function route(){
   const hash = location.hash || '#/';
   const claim = hash.match(/^#\/claim\/(.+)$/);
   if(claim){ screenClaim(claim[1]); return; }
+  const psetup = hash.match(/^#\/parent-setup\/(.+)$/);
+  if(psetup){ screenParentSetup(psetup[1]); return; }
   if(hash==='#/login'){ screenLogin(); return; }
+  if(hash==='#/privacy'){ screenPrivacy(); return; }
 
   const me = await ensureMe();
   if(!me){ screenLogin(); return; }
@@ -302,7 +306,21 @@ async function route(){
       if(sd) return screenAdminStudent(sd[1]);
       return screenAdmin();
     }
+    if(me.role==='parent'){
+      if(hash==='#/what-parent-sees') return screenWhatParentSees();
+      if(hash==='#/approvals') return screenParentApprovals();
+      if(hash==='#/add-teen') return screenAddTeen();
+      const cd = hash.match(/^#\/child\/(\d+)\/doc\/(.+)$/);
+      const cc = hash.match(/^#\/child\/(\d+)$/);
+      if(cd) return screenParentDoc(cd[1],cd[2]);
+      if(cc) return screenParentChild(cc[1]);
+      return screenParentHome();
+    }
     // student
+    if(me.link_pending) return screenLinkPending();
+    if(hash==='#/score') return screenScore();
+    if(hash==='#/checkpoints') return screenCheckpoints();
+    if(hash==='#/what-parent-sees') return screenWhatParentSees();
     if(!me.has_onboarded && hash!=='#/onboarding'){ location.hash='#/onboarding'; return; }
     if(hash==='#/onboarding') return screenOnboarding();
     const ch = hash.match(/^#\/chapter\/(.+)$/);
@@ -326,5 +344,6 @@ window.addEventListener('hashchange', route);
 window.addEventListener('load', async ()=>{ await renderBeta(); route(); });
 </script>
 <script src="/binder.js"></script>
+<script src="/family.js"></script>
 </body>
 </html>

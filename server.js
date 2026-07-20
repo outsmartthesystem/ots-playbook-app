@@ -6,12 +6,14 @@ const compression = require('compression');
 const cors = require('cors');
 
 const fs = require('fs');
+const crypto = require('crypto');
 const { query, tx } = require('./lib/db');
 const migrate = require('./migrate');
 const artifacts = require('./lib/artifacts');
+const family = require('./lib/family');
 const {
   hashPassword, verifyPassword, signToken, randomToken, hashToken,
-  authRequired, requireRole, loginRateLimit,
+  authRequired, requireRole, loginRateLimit, parentOf,
 } = require('./lib/auth');
 
 function nonEmpty(v) { return v != null && String(v).trim() !== ''; }
@@ -60,6 +62,7 @@ function publicUser(u) {
     first_name: u.first_name, last_initial: u.last_initial,
     has_onboarded: u.has_onboarded, account_state: u.account_state,
     is_adult_student: u.is_adult_student, review_day: u.review_day, call_group: u.call_group,
+    link_pending: u.link_pending || false,
   };
 }
 
@@ -605,6 +608,24 @@ app.get('/api/admin/artifacts/:id', authRequired(), requireRole('admin'), h(asyn
 
 app.post('/api/admin/artifacts/:id/verify', authRequired(), requireRole('admin'), h(async (req, res) => {
   const id = parseInt(req.params.id, 10);
+  // checkpoint gate (plan 3.2): an artifact cannot be verified until required parent sign-offs are approved
+  const { rows: ar } = await query(
+    `SELECT a.student_id, c.number AS chapter_number FROM artifacts a LEFT JOIN chapters c ON c.id = a.chapter_id WHERE a.id = $1`, [id]
+  );
+  if (ar[0]) {
+    const required = family.GATES_VERIFY_BY_CHAPTER[ar[0].chapter_number] || [];
+    if (required.length) {
+      const { rows: appr } = await query(
+        `SELECT checkpoint_key FROM approvals WHERE student_id=$1 AND status='approved' AND checkpoint_key = ANY($2)`,
+        [ar[0].student_id, required]
+      );
+      const approved = new Set(appr.map((r) => r.checkpoint_key));
+      const missing = required.filter((k) => !approved.has(k));
+      if (missing.length) {
+        return res.status(409).json({ error: `A parent sign-off is still open (${missing.join(', ')}). Verify is blocked until the parent approves.`, missing_checkpoints: missing });
+      }
+    }
+  }
   const { rows } = await query(`UPDATE artifacts SET status='verified', reviewed_at=now(), reviewed_by=$1, updated_at=now() WHERE id=$2 AND status='submitted' RETURNING student_id, kind`, [req.user.id, id]);
   if (!rows[0]) return res.status(409).json({ error: 'not in submitted state' });
   await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES ($1,'verify_artifact',$2)`, [req.user.id, JSON.stringify({ id })]);
@@ -628,6 +649,325 @@ app.post('/api/admin/artifacts/:id/return', authRequired(), requireRole('admin')
   await notify(cur[0].student_id, 'artifact_returned', `Coach Jay sent your ${cur[0].kind.replace(/_/g, ' ')} back with a note.`, `#/binder`);
   await logEvent({ student_id: cur[0].student_id, actor_id: req.user.id, type: 'artifact_returned', entity_type: 'artifact', entity_id: id, detail: { kind: cur[0].kind } });
   res.json({ ok: true, status: 'returned' });
+}));
+
+// ================= P2: the family layer =================
+const { sendEmail } = require('./lib/email');
+const AGE_GATE_COPY = 'This program is for teens 13 to 17, with a parent account linked. Students 18 and older can hold their own account. Under 13 is not supported, and we do not knowingly collect information from children under 13.';
+const PARENT_VISIBILITY = {
+  sees: ['Which chapter and step your teen is on', 'The documents your teen submits (you can read them)', 'Coursework questions and Jay\'s answers', 'Jay\'s review notes', 'The weekly scoreboard (self-reported by your teen)', 'Requests for your sign-off'],
+  not_sees: ['Unsaved drafts', 'Safety-flagged messages (a trained responder handles those)', 'Your teen\'s password or login activity'],
+};
+const PRIVACY_TEXT = [
+  'What we collect: your name and email (parent), your teen\'s first name, last initial, age, and the work they do in the program.',
+  'Why: to run the program and show a parent their teen\'s progress. That is all.',
+  'Who sees what: you see your teen\'s progress, submitted work, and coursework questions. A trained OTS responder may review a message that looks like a safety concern.',
+  'An automated system reads each question first to route it and to catch safety concerns. A person (Jay or a trained responder) handles anything it flags.',
+  'We do not sell your data, and we do not run ads.',
+  'You can ask us to delete your teen\'s data. The full Privacy Policy and Terms are separate documents your parent reviews before you start.',
+];
+
+function phoenixNow() { return new Date(Date.now() - 7 * 3600 * 1000); } // UTC-7, no DST
+function phoenixWeekday() { return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][phoenixNow().getUTCDay()]; }
+function mondayOfPhoenix() { const d = phoenixNow(); const diff = (d.getUTCDay() + 6) % 7; const m = new Date(d); m.setUTCDate(d.getUTCDate() - diff); return m.toISOString().slice(0, 10); }
+function metricPair(val, unknown) { if (unknown) return [null, true]; if (val === '' || val == null) return [null, false]; const n = parseInt(val, 10); return [Number.isNaN(n) ? null : n, false]; }
+
+app.get('/api/privacy', (req, res) => res.json({ paragraphs: PRIVACY_TEXT }));
+app.get('/api/parent-visibility', (req, res) => res.json(PARENT_VISIBILITY));
+
+// ----- parent account setup (from an emailed single-use link) -----
+app.post('/api/parent/setup', h(async (req, res) => {
+  const { token, password, consents } = req.body || {};
+  if (!token || !password) return res.status(400).json({ error: 'token and password required' });
+  if (String(password).length < 8) return res.status(400).json({ error: 'password must be at least 8 characters' });
+  const need = family.CONSENT_KEYS.map((c) => c.key);
+  if (!consents || !need.every((k) => consents[k] === true)) {
+    return res.status(400).json({ error: 'All four consent boxes are required to continue.' });
+  }
+  const { rows } = await query(`SELECT * FROM invites WHERE token_hash = $1 AND kind = 'parent_setup' LIMIT 1`, [hashToken(token)]);
+  const inv = rows[0];
+  if (!inv) return res.status(404).json({ error: 'setup link not found' });
+  if (inv.used_at) return res.status(410).json({ error: 'this link was already used' });
+  if (new Date(inv.expires_at) < new Date()) return res.status(410).json({ error: 'this link expired' });
+  const hash = await hashPassword(password);
+  await tx(async (client) => {
+    await client.query(`UPDATE users SET password_hash=$1, account_state='active', token_version=token_version+1 WHERE id=$2`, [hash, inv.target_user_id]);
+    for (const k of need) await client.query(`INSERT INTO consent_acknowledgements (parent_id, key) VALUES ($1,$2)`, [inv.target_user_id, k]);
+    await client.query(`UPDATE invites SET used_at=now() WHERE id=$1`, [inv.id]);
+  });
+  const { rows: u } = await query(`SELECT * FROM users WHERE id = $1`, [inv.target_user_id]);
+  res.json({ token: signToken(u[0]), user: publicUser(u[0]) });
+}));
+
+// ----- parent adds a teen (creates the student + family link + claim link) -----
+app.post('/api/parent/add-teen', authRequired(), requireRole('parent'), h(async (req, res) => {
+  const first = (req.body && req.body.first_name || '').trim();
+  const lastInitial = (req.body && req.body.last_initial || '').trim() || null;
+  const username = (req.body && req.body.username || '').trim() || null;
+  const age = parseInt(req.body && req.body.age, 10);
+  if (!first || Number.isNaN(age)) return res.status(400).json({ error: 'first name and age required' });
+  if (age < 13) return res.status(400).json({ error: AGE_GATE_COPY });
+  const isAdult = age >= 18;
+  const { rows } = await query(
+    `INSERT INTO users (role, first_name, last_initial, age_at_signup, username, is_adult_student, account_state)
+     VALUES ('student',$1,$2,$3,$4,$5,'created') RETURNING *`,
+    [first, lastInitial, age, username, isAdult]
+  );
+  const student = rows[0];
+  const claimToken = randomToken();
+  await tx(async (client) => {
+    await client.query(`INSERT INTO family_links (parent_id, student_id, created_by, status) VALUES ($1,$2,$1,'active')`, [req.user.id, student.id]);
+    await client.query(`UPDATE enrollments SET student_id=$1 WHERE parent_id=$2 AND student_id IS NULL AND status='active'`, [student.id, req.user.id]);
+    await client.query(`INSERT INTO invites (kind, token_hash, target_user_id, expires_at) VALUES ('student_claim',$1,$2,$3)`,
+      [hashToken(claimToken), student.id, new Date(Date.now() + 7 * 864e5)]);
+  });
+  const base = process.env.APP_URL || `http://localhost:${process.env.PORT || 3000}`;
+  res.json({ student: publicUser(student), claim_url: `${base}/#/claim/${claimToken}` });
+}));
+
+// ----- parent dashboard -----
+app.get('/api/parent/children', authRequired(), requireRole('parent'), h(async (req, res) => {
+  const { rows } = await query(
+    `SELECT u.id, u.first_name, u.last_initial, u.account_state
+       FROM users u JOIN family_links f ON f.student_id = u.id
+      WHERE f.parent_id = $1 AND f.status = 'active' AND u.deleted_at IS NULL ORDER BY u.first_name`,
+    [req.user.id]
+  );
+  res.json({ children: rows });
+}));
+
+app.get('/api/parent/children/:id', authRequired(), requireRole('parent'), h(async (req, res) => {
+  const sid = parseInt(req.params.id, 10);
+  if (!(await parentOf(req.user.id, sid))) return res.status(403).json({ error: 'not your teen' });
+  const { rows: su } = await query(`SELECT first_name, last_initial FROM users WHERE id = $1`, [sid]);
+  const { rows: arts } = await query(
+    `SELECT kind, status, submitted_at, reviewed_at, review_note FROM artifacts
+      WHERE student_id = $1 AND status IN ('submitted','verified','returned')
+      ORDER BY COALESCE(reviewed_at, submitted_at) DESC`, [sid]
+  );
+  const { rows: submitted } = await query(`SELECT COUNT(*)::int AS n FROM artifacts WHERE student_id=$1 AND status IN ('submitted','verified')`, [sid]);
+  const { rows: last } = await query(`SELECT max(created_at) AS last FROM events WHERE student_id = $1`, [sid]);
+  const { rows: appr } = await query(
+    `SELECT id, checkpoint_key, subject_ref, created_at FROM approvals WHERE student_id=$1 AND parent_id=$2 AND status='requested' ORDER BY created_at`, [sid, req.user.id]
+  );
+  const { rows: weeks } = await query(
+    `SELECT week_start, clicks, clicks_unknown, leads, leads_unknown, paid, paid_unknown, revenue_cents, revenue_unknown
+       FROM scoreboard_weeks WHERE student_id=$1 ORDER BY week_start DESC LIMIT 8`, [sid]
+  );
+  res.json({
+    student: su[0], documents_submitted: submitted[0].n, last_activity: last[0].last,
+    artifacts: arts,
+    pending_approvals: appr.map((a) => ({ ...a, text: (family.CHECKPOINTS_BY_KEY[a.checkpoint_key] || {}).text })),
+    scoreboard: weeks.reverse(),
+    visibility: PARENT_VISIBILITY,
+  });
+}));
+
+app.get('/api/parent/artifact/:studentId/:kind', authRequired(), requireRole('parent'), h(async (req, res) => {
+  const sid = parseInt(req.params.studentId, 10);
+  if (!(await parentOf(req.user.id, sid))) return res.status(403).json({ error: 'not your teen' });
+  const { rows } = await query(
+    `SELECT kind, data, status, review_note FROM artifacts WHERE student_id=$1 AND kind=$2 AND status IN ('submitted','verified','returned')`,
+    [sid, req.params.kind]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'nothing to show yet' });
+  res.json({ artifact: rows[0] }); // read-only, no write route exists for parents
+}));
+
+// ----- checkpoints (student requests; parent decides) -----
+app.get('/api/me/checkpoints', authRequired(), requireRole('student'), h(async (req, res) => {
+  const { rows } = await query(`SELECT checkpoint_key, subject_ref, status, note FROM approvals WHERE student_id=$1 ORDER BY created_at DESC`, [req.user.id]);
+  res.json({ registry: family.CHECKPOINT_REGISTRY, approvals: rows });
+}));
+
+app.post('/api/checkpoints/:key/request', authRequired(), requireRole('student'), h(async (req, res) => {
+  const cp = family.CHECKPOINTS_BY_KEY[req.params.key];
+  if (!cp) return res.status(404).json({ error: 'unknown checkpoint' });
+  const subject = cp.per_subject ? (req.body && req.body.subject_ref || '').trim() : null;
+  if (cp.per_subject && !subject) return res.status(400).json({ error: 'name the person this consent is about' });
+  const releaseRef = req.params.key === 'CP-STORY-CONSENT' ? (req.body && req.body.release_reference || '').trim() : null;
+  const { rows: p } = await query(`SELECT parent_id FROM family_links WHERE student_id=$1 AND status='active' ORDER BY id LIMIT 1`, [req.user.id]);
+  const parentId = p[0] ? p[0].parent_id : null;
+  // avoid a duplicate open request for the same key+subject
+  const { rows: dup } = await query(
+    `SELECT id FROM approvals WHERE student_id=$1 AND checkpoint_key=$2 AND COALESCE(subject_ref,'')=$3 AND status='requested'`,
+    [req.user.id, req.params.key, subject || '']
+  );
+  if (dup[0]) return res.json({ ok: true, already: true });
+  const { rows: a } = await query(
+    `INSERT INTO approvals (checkpoint_key, student_id, parent_id, subject_ref, release_reference, status) VALUES ($1,$2,$3,$4,$5,'requested') RETURNING id`,
+    [req.params.key, req.user.id, parentId, subject, releaseRef]
+  );
+  await query(`INSERT INTO approval_events (approval_id, actor_id, actor_role, event) VALUES ($1,$2,'student','requested')`, [a[0].id, req.user.id]);
+  if (parentId) {
+    await notify(parentId, 'approval_requested', `${req.user.first_name} asked for your sign-off: ${cp.text}`, '#/approvals');
+    const { rows: pu } = await query(`SELECT email FROM users WHERE id=$1`, [parentId]);
+    if (pu[0] && pu[0].email) await sendEmail({ to: pu[0].email, subject: 'Your teen needs a sign-off', text: cp.text, html: null });
+  }
+  await logEvent({ student_id: req.user.id, actor_id: req.user.id, type: 'checkpoint_requested', detail: { key: req.params.key } });
+  res.json({ ok: true });
+}));
+
+app.get('/api/parent/approvals', authRequired(), requireRole('parent'), h(async (req, res) => {
+  const { rows } = await query(
+    `SELECT a.id, a.checkpoint_key, a.subject_ref, a.release_reference, a.created_at, u.first_name, a.student_id
+       FROM approvals a JOIN users u ON u.id = a.student_id
+       JOIN family_links f ON f.student_id = a.student_id AND f.parent_id = $1 AND f.status='active'
+      WHERE a.status = 'requested' ORDER BY a.created_at`, [req.user.id]
+  );
+  // record an append-only 'viewed' event once per parent+approval (plan 3.2 trail: requested/viewed/decided)
+  for (const r of rows) {
+    await query(
+      `INSERT INTO approval_events (approval_id, actor_id, actor_role, event, ip, user_agent)
+       SELECT $1,$2,'parent','viewed',$3,$4
+        WHERE NOT EXISTS (SELECT 1 FROM approval_events WHERE approval_id=$1 AND actor_id=$2 AND event='viewed')`,
+      [r.id, req.user.id, req.ip, (req.headers['user-agent'] || '').slice(0, 300)]
+    );
+  }
+  res.json({ approvals: rows.map((r) => ({ ...r, text: (family.CHECKPOINTS_BY_KEY[r.checkpoint_key] || {}).text })) });
+}));
+
+app.post('/api/parent/approvals/:id/:action', authRequired(), requireRole('parent'), h(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const action = req.params.action; // approve | decline | revoke
+  if (!['approve', 'decline', 'revoke'].includes(action)) return res.status(400).json({ error: 'bad action' });
+  const note = (req.body && req.body.note || '').trim();
+  if (action === 'decline' && !note) return res.status(400).json({ error: 'Add a short note so your teen knows why.' });
+  const { rows: a } = await query(
+    `SELECT a.* FROM approvals a JOIN family_links f ON f.student_id=a.student_id AND f.parent_id=$1 AND f.status='active' WHERE a.id=$2`,
+    [req.user.id, id]
+  );
+  if (!a[0]) return res.status(404).json({ error: 'not found' });
+  const status = action === 'approve' ? 'approved' : action === 'decline' ? 'declined' : 'revoked';
+  await tx(async (client) => {
+    await client.query(`UPDATE approvals SET status=$1, note=$2, parent_id=$3, resolved_at=now() WHERE id=$4`, [status, note || null, req.user.id, id]);
+    await client.query(
+      `INSERT INTO approval_events (approval_id, actor_id, actor_role, event, note, ip, user_agent) VALUES ($1,$2,'parent',$3,$4,$5,$6)`,
+      [id, req.user.id, status, note || null, req.ip, (req.headers['user-agent'] || '').slice(0, 300)]
+    );
+  });
+  const cp = family.CHECKPOINTS_BY_KEY[a[0].checkpoint_key] || {};
+  await notify(a[0].student_id, 'approval_' + status,
+    action === 'decline' ? `Your parent said "not yet" on: ${cp.text} (${note})` : `Your parent ${status} your sign-off: ${cp.text}`, '#/checkpoints');
+  if (action === 'revoke') {
+    await query(
+      `INSERT INTO notifications (user_id, kind, body) SELECT id, 'consent_revoked', $1 FROM users WHERE role='admin' AND deleted_at IS NULL`,
+      [`A CP-STORY-CONSENT was revoked for student ${a[0].student_id}. Check any content that references them.`]
+    );
+  }
+  res.json({ ok: true, status });
+}));
+
+// ----- scoreboard (student) -----
+app.get('/api/me/scoreboard', authRequired(), requireRole('student'), h(async (req, res) => {
+  const { rows } = await query(`SELECT * FROM scoreboard_weeks WHERE student_id=$1 ORDER BY week_start DESC LIMIT 12`, [req.user.id]);
+  res.json({ weeks: rows, review_day: req.user.review_day, today_is_review_day: phoenixWeekday() === req.user.review_day, this_monday: mondayOfPhoenix() });
+}));
+
+app.post('/api/me/scoreboard', authRequired(), requireRole('student'), h(async (req, res) => {
+  const b = req.body || {};
+  const week = (b.week_start || mondayOfPhoenix()).slice(0, 10);
+  if (!nonEmpty(b.leak) || !nonEmpty(b.learning) || !nonEmpty(b.dial_in)) {
+    return res.status(400).json({ error: 'Leak, learning, and dial-in are all required. Numbers first, feelings second.' });
+  }
+  const dial = String(b.dial_in).replace(/\s*\n\s*/g, ' ').trim().slice(0, 240); // one sentence
+  const [clicks, cu] = metricPair(b.clicks, b.clicks_unknown);
+  const [leads, lu] = metricPair(b.leads, b.leads_unknown);
+  const [paid, pu] = metricPair(b.paid, b.paid_unknown);
+  // revenue is entered in dollars and may have cents; parse as a decimal, do not truncate.
+  const ru = !!b.revenue_unknown;
+  let revenueCents = null;
+  if (!ru && b.revenue != null && String(b.revenue).trim() !== '') {
+    const fdollars = parseFloat(b.revenue);
+    revenueCents = Number.isNaN(fdollars) ? null : Math.round(fdollars * 100);
+  }
+  const filledLate = week < mondayOfPhoenix();
+  await query(
+    `INSERT INTO scoreboard_weeks (student_id, week_start, front_door, clicks, clicks_unknown, leads, leads_unknown,
+       paid, paid_unknown, revenue_cents, revenue_unknown, posts_shipped, best_post, hand_counted_extras,
+       leak, learning, dial_in, filled_late)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     ON CONFLICT (student_id, week_start) DO UPDATE SET front_door=$3, clicks=$4, clicks_unknown=$5, leads=$6, leads_unknown=$7,
+       paid=$8, paid_unknown=$9, revenue_cents=$10, revenue_unknown=$11, posts_shipped=$12, best_post=$13,
+       hand_counted_extras=$14, leak=$15, learning=$16, dial_in=$17, updated_at=now()`,
+    [req.user.id, week, (b.front_door || '').trim() || null, clicks, cu, leads, lu, paid, pu, revenueCents, ru,
+      metricPair(b.posts_shipped, false)[0], (b.best_post || '').trim() || null, (b.hand_counted_extras || '').trim() || null,
+      b.leak.trim(), b.learning.trim(), dial, filledLate]
+  );
+  await logEvent({ student_id: req.user.id, actor_id: req.user.id, type: 'scoreboard_week_logged', detail: { week } });
+  res.json({ ok: true, filled_late: filledLate });
+}));
+
+// ----- admin cohort v2 -----
+app.get('/api/admin/cohort', authRequired(), requireRole('admin'), h(async (req, res) => {
+  const { rows: cfg } = await query(`SELECT key, value FROM app_config WHERE key LIKE 'attn_weight_%'`);
+  const w = Object.fromEntries(cfg.map((r) => [r.key, parseFloat(r.value)]));
+  const { rows } = await query(`
+    SELECT u.id, u.first_name, u.last_initial, u.account_state, u.call_group,
+      (SELECT max(created_at) FROM events e WHERE e.student_id=u.id) AS last_activity,
+      (SELECT count(*) FROM artifacts a WHERE a.student_id=u.id AND a.status='submitted') AS pending_review,
+      (SELECT min(submitted_at) FROM artifacts a WHERE a.student_id=u.id AND a.status='submitted') AS oldest_submitted,
+      (SELECT count(*) FROM approvals ap WHERE ap.student_id=u.id AND ap.status='requested') AS pending_approvals,
+      (SELECT count(*) FROM artifacts a WHERE a.student_id=u.id AND a.status='returned') AS returned_untouched
+     FROM users u WHERE u.role='student' AND u.deleted_at IS NULL`);
+  const now = Date.now();
+  const days = (t) => (t ? (now - new Date(t).getTime()) / 86400000 : 999);
+  const students = rows.map((r) => {
+    const idle = days(r.last_activity);
+    const oldestReview = r.oldest_submitted ? days(r.oldest_submitted) : 0;
+    const score = (w.attn_weight_days_idle || 1) * idle
+      + (w.attn_weight_returned_untouched_age || 1) * (Number(r.returned_untouched) > 0 ? 3 : 0)
+      + (w.attn_weight_pending_approval_age || 1) * (Number(r.pending_approvals) > 0 ? 2 : 0)
+      + oldestReview;
+    let flag = 'green';
+    if (idle >= 10 || (r.returned_untouched > 0 && idle >= 7)) flag = 'red';
+    else if (idle >= 5 || oldestReview >= 5) flag = 'yellow';
+    const reason = idle >= 5 ? `${Math.floor(idle)} days quiet` : r.pending_review > 0 ? 'work to review' : r.pending_approvals > 0 ? 'parent sign-off pending' : 'ok';
+    return { ...r, days_idle: Math.floor(idle), attention: Math.round(score * 10) / 10, flag, reason };
+  }).sort((a, b) => b.attention - a.attention);
+  const queues = {
+    review: students.reduce((s, x) => s + Number(x.pending_review), 0),
+    approvals: students.reduce((s, x) => s + Number(x.pending_approvals), 0),
+  };
+  // scoreboard grid: last 8 week_starts x students filled/not
+  const { rows: grid } = await query(
+    `SELECT student_id, week_start FROM scoreboard_weeks WHERE week_start >= (CURRENT_DATE - INTERVAL '8 weeks')`);
+  res.json({ students, queues, scoreboard_grid: grid });
+}));
+
+// ----- admin: manual family provisioning (the launch path, plan 6.5) -----
+app.post('/api/admin/invite-family', authRequired(), requireRole('admin'), h(async (req, res) => {
+  const email = (req.body && req.body.parent_email || '').trim().toLowerCase();
+  const program = (req.body && req.body.program || 'mastermind_995').trim();
+  if (!email) return res.status(400).json({ error: 'parent email required' });
+  let parentId;
+  const { rows: ex } = await query(`SELECT id FROM users WHERE email=$1`, [email]);
+  if (ex[0]) parentId = ex[0].id;
+  else {
+    const { rows } = await query(`INSERT INTO users (role, email, account_state) VALUES ('parent',$1,'created') RETURNING id`, [email]);
+    parentId = rows[0].id;
+  }
+  await query(`INSERT INTO enrollments (parent_id, program, source, status) VALUES ($1,$2,'admin_invite','active')`, [parentId, program]);
+  const token = randomToken();
+  await query(`INSERT INTO invites (kind, token_hash, target_user_id, expires_at) VALUES ('parent_setup',$1,$2,$3)`,
+    [hashToken(token), parentId, new Date(Date.now() + 3 * 864e5)]);
+  await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES ($1,'invite_family',$2)`, [req.user.id, JSON.stringify({ email, program })]);
+  const base = process.env.APP_URL || `http://localhost:${process.env.PORT || 3000}`;
+  const setupUrl = `${base}/#/parent-setup/${token}`;
+  if ((process.env.LAUNCH_MODE || 'preview') === 'preview') {
+    return res.json({ ok: true, preview: true, setup_url: setupUrl, note: 'Preview mode: link not emailed. Hand it over directly.' });
+  }
+  await sendEmail({ to: email, subject: 'Set up your Outsmart the System parent account', text: `Set your password and link your teen: ${setupUrl}`, html: null });
+  res.json({ ok: true, emailed: true });
+}));
+
+// one-click digest unsubscribe (HMAC, plan 3.2). Matches digest.js token.
+app.get('/unsubscribe', h(async (req, res) => {
+  const p = parseInt(req.query.p, 10);
+  const expected = crypto.createHmac('sha256', process.env.JWT_SECRET || 'dev').update('unsub:' + p).digest('hex').slice(0, 32);
+  if (!p || req.query.t !== expected) return res.status(400).send('Invalid link.');
+  await query(`UPDATE users SET weekly_digest_opt_out=TRUE WHERE id=$1 AND role='parent'`, [p]);
+  res.send('<p style="font-family:sans-serif;max-width:480px;margin:40px auto">You are unsubscribed from the weekly digest. You can turn it back on in the app.</p>');
 }));
 
 // ---------- static SPA ----------

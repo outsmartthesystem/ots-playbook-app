@@ -199,7 +199,70 @@ const STATEMENTS = [
     UNIQUE (target, kind, occurrence)
   )`,
 
+  // --- P1: the Business Binder ---
+  `CREATE TABLE IF NOT EXISTS artifacts (
+    id SERIAL PRIMARY KEY,
+    student_id INT NOT NULL REFERENCES users(id),
+    chapter_id INT REFERENCES chapters(id),
+    kind TEXT NOT NULL,
+    data JSONB NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'draft'
+      CHECK (status IN ('draft','parked','submitted','returned','verified')),
+    current_version INT NOT NULL DEFAULT 1,
+    open_flag_count INT NOT NULL DEFAULT 0,
+    parked_reason TEXT,
+    submitted_at TIMESTAMPTZ,
+    reviewed_at TIMESTAMPTZ,
+    reviewed_by INT REFERENCES users(id),
+    review_note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (student_id, kind)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS artifact_versions (
+    id SERIAL PRIMARY KEY,
+    artifact_id INT NOT NULL REFERENCES artifacts(id),
+    version INT NOT NULL,
+    data JSONB NOT NULL,
+    status_at_save TEXT NOT NULL,
+    edited_by INT REFERENCES users(id),
+    change_note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (artifact_id, version)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS pivot_entries (
+    id SERIAL PRIMARY KEY,
+    artifact_id INT NOT NULL REFERENCES artifacts(id),
+    field TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    reason TEXT NOT NULL,
+    evidence TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS gate_runs (
+    id SERIAL PRIMARY KEY,
+    student_id INT NOT NULL REFERENCES users(id),
+    published_thing_ref TEXT NOT NULL,
+    answers JSONB NOT NULL DEFAULT '[]',
+    passed BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS review_snippets (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    times_used INT NOT NULL DEFAULT 0
+  )`,
+
   // helpful indexes
+  `CREATE INDEX IF NOT EXISTS idx_artifacts_student ON artifacts(student_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_artifact_versions_artifact ON artifact_versions(artifact_id)`,
   `CREATE INDEX IF NOT EXISTS idx_progress_student ON progress(student_id)`,
   `CREATE INDEX IF NOT EXISTS idx_events_student ON events(student_id)`,
   `CREATE INDEX IF NOT EXISTS idx_steps_chapter ON steps(chapter_id)`,
@@ -226,6 +289,18 @@ async function migrate() {
       `INSERT INTO app_config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
       [key, value]
     );
+  }
+  // seed review snippets once (Jay's reusable Return/Verify notes; plan P1 task 6)
+  const { rows: rs } = await query(`SELECT COUNT(*)::int AS n FROM review_snippets`);
+  if (rs[0].n === 0) {
+    const snippets = [
+      ['Add a real quote', 'This is strong. Before I verify it, point each problem at a real quote from your VoC sheet, or flag it "no source yet".'],
+      ['Make the price defensible', 'Good progress. Write the "why" next to each value so every number is one you could say out loud and back up.'],
+      ['Honest and clear', 'This reads honest and clear. Verified. Nice work.'],
+    ];
+    for (const [title, body] of snippets) {
+      await query(`INSERT INTO review_snippets (title, body) VALUES ($1, $2)`, [title, body]);
+    }
   }
   return STATEMENTS.length;
 }

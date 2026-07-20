@@ -1,0 +1,157 @@
+{
+  "artifacts": [
+    {
+      "kind": "voc_sheet",
+      "data": {
+        "who_my_customer_is": "A guardian (usually a parent) of a new or struggling 9th grader who watched the jump to high school hit all at once: more classes, more independence, and no system to hold it together. Note: Elena is a made-up example teen. These quotes are illustrative and are not real OTS customer data.",
+        "interviews": [
+          {
+            "name": "Parent 1 (pseudonym)",
+            "role": "guardian of a 9th grader",
+            "date": "2026-05-12",
+            "recorded_consent": true,
+            "adult_in_loop": true,
+            "pseudonymized": true,
+            "summary": "Talked about the blank planner and the fear of finding out too late. Guardian Rosa was in the loop for the recording."
+          },
+          {
+            "name": "Student 1 (pseudonym)",
+            "role": "incoming 9th grader",
+            "date": "2026-05-15",
+            "recorded_consent": true,
+            "adult_in_loop": true,
+            "pseudonymized": true,
+            "summary": "Said high school just expects you to already be organized. Recorded with the student's and their parent's permission; Rosa reviewed the notes."
+          }
+        ],
+        "quotes": [
+          {
+            "bucket": "fears",
+            "verbatim_text": "I lie awake worried he is already behind and I will not catch it until report cards.",
+            "attribution": "Parent 1 (pseudonym)"
+          },
+          {
+            "bucket": "frustrations",
+            "verbatim_text": "The planner comes home blank every single day. I have no idea what is even due.",
+            "attribution": "Parent 2 (pseudonym)"
+          },
+          {
+            "bucket": "dream",
+            "verbatim_text": "I just want one system she actually uses, not another app we forget about by October.",
+            "attribution": "Parent 3 (pseudonym)"
+          },
+          {
+            "bucket": "exact_words",
+            "verbatim_text": "High school just expects them to be organized on day one, and nobody teaches that part.",
+            "attribution": "Student 1 (pseudonym)"
+          },
+          {
+            "bucket": "objections",
+            "verbatim_text": "Seventy-nine dollars is a lot for one session. How do I know it will stick after you leave?",
+            "attribution": "Parent 4 (pseudonym)"
+          },
+          {
+            "bucket": "price",
+            "verbatim_text": "For something that actually gets used, I would pay somewhere around eighty to a hundred dollars.",
+            "attribution": "Parent 5 (pseudonym)"
+          }
+        ],
+        "top_three": [
+          "Guardians want ONE system that actually gets used, not more apps.",
+          "The blank planner and the missed-assignment surprise are the daily pain.",
+          "The real fear is finding out too late, at report-card time."
+        ]
+      }
+    },
+    {
+      "kind": "brandscript",
+      "data": {
+        "hero_composite": "Rosa, a guardian of a nervous new 9th grader who was organized enough in middle school but is now drowning in the first weeks of high school. She is not looking for a tutor. She wants her kid to run one simple system without being nagged. (Made-up example hero, not real OTS data.)",
+        "external_problem": {
+          "text": "The planner sits empty, the backpack is a black hole, and assignments slip through in the first weeks of high school.",
+          "source_quote_ref": "voc:1",
+          "no_source": false
+        },
+        "internal_problem": {
+          "text": "The guardian feels anxious and a little helpless, watching their kid start behind and not knowing how to help without nagging.",
+          "source_quote_ref": "voc:0",
+          "no_source": false
+        },
+        "philosophical_problem": {
+          "text": "A 14-year-old should not have to invent a whole organization system alone in week one just because high school assumes they already have one.",
+          "source_quote_ref": "voc:3",
+          "no_source": false
+        },
+        "guide": "Elena has been the new 9th grader. She empathizes first (she remembers the blank planner), then shows authority: a simple, repeatable setup she has run start to finish. Organization coaching only.",
+        "plan": "1. Take the free Freshman Friction Point Quiz to name the biggest friction point. 2. Book one 75-minute LaunchPad Freshman Reset session with the student and guardian. 3. Run the one system for 14 days with a short follow-up sequence.",
+        "cta": "Book the LaunchPad Freshman Reset session ($79). Free first step: take the Freshman Friction Point Quiz.",
+        "failure": "The year drifts, the planner stays blank, missing work piles up, and the family finds out at report cards when it is late and stressful.",
+        "success": "The student runs one simple school system on their own, the guardian stops nagging, and the semester starts organized instead of overwhelmed.",
+        "one_liner": "Most families hit 9th grade and the middle-school routines quietly fall apart. I help a new or struggling 9th grader and their guardian set up one simple school system that actually gets used, so the year starts organized instead of overwhelmed.",
+        "dinner_party_tests": [
+          "Said it to a neighbor: she asked 'so is it tutoring?' and I clarified it is organization coaching. Passed after one tweak.",
+          "Said it to an uncle: he immediately said 'my nephew needs that in September.' Passed."
+        ],
+        "voice_memo": "Plain, calm, a little confessional. Short sentences. Words I use: system, friction, planner, week one. Words I ban: hack, guaranteed, straight-As, effortless. No hype, no grade promises.",
+        "story_file": [
+          "My own 9th grade week one: three binders, zero system, and a planner I never opened. That is the story I keep coming back to.",
+          "A friend's little brother missed a whole project because it lived on a sticky note that fell off the fridge. The friction was invisible until it was a zero."
+        ]
+      }
+    },
+    {
+      "kind": "offer_truth_file",
+      "data": {
+        "paid_offer": {
+          "name": "LaunchPad Freshman Reset",
+          "who_for": "A new or struggling 9th grader and their guardian.",
+          "deliverables": "One 75-minute setup session, a personalized weekly planner template, a backpack and Google Drive cleanup checklist, and a 14-day follow-up email sequence.",
+          "price_cents": 7900,
+          "refund_promise_exact_words": "Full refund within 14 days if it is not a fit.",
+          "payment_link": "Set by Rosa in Stripe (example binder, no live checkout)."
+        },
+        "free_front_door": {
+          "name": "Freshman Friction Point Quiz",
+          "what": "A short, free quiz that helps a guardian name their student's single biggest organization friction point in about two minutes.",
+          "points_to": "LaunchPad Freshman Reset"
+        },
+        "claims_allowed": [
+          {
+            "claim": "One 75-minute live setup session with the student and their guardian.",
+            "proof_source": "Session length set in Elena's booking calendar and stated the same way on the sales page and terms page."
+          },
+          {
+            "claim": "Full refund within 14 days if it is not a fit.",
+            "proof_source": "Refund promise written word for word on the terms page, reviewed by Rosa (guardian) before it went live."
+          }
+        ],
+        "claims_never": [
+          "Made-up numbers or stats",
+          "Fake reviews or testimonials",
+          "Fake countdowns or fake \"spots left\"",
+          "Any promise of better grades or a GPA result",
+          "Calling it tutoring or therapy (it is organization coaching only)"
+        ],
+        "scarcity_check": "Sessions are 1:1 and live, so only a real, small number fit in a week. Any 'spots left this week' number must match Elena's actual open calendar slots. No fake countdowns.",
+        "front_door_history": [
+          {
+            "date": "2026-06-01",
+            "change": "Rewrote the free quiz opener around 'Find your student's biggest friction point.'",
+            "reason": "Week-1 scoreboard (example numbers, not real OTS data) showed parents clicked the quiz but left before giving their email because the opener did not promise a clear result."
+          }
+        ]
+      }
+    },
+    {
+      "kind": "no_brainer_stack",
+      "data": {
+        "sections": {
+          "dream_outcome": "In their words: \"I just want one system she actually uses, not another app we forget about by October.\" A first semester where the student runs one simple routine on their own and the guardian can finally stop nagging.",
+          "stack": "1. 75-minute live setup session (student + guardian). Honest value: $79, the price Elena charges for the session itself. Why: this is the core, the hands-on hour where the system gets built together.\n2. Personalized weekly planner template. Honest value: about $15 (a fair comparable for a custom template). Why: gives the student the exact page to run every week.\n3. Backpack and Google Drive cleanup checklist. Honest value: about $10 comparable. Why: clears the mess that hides missing work.\n4. 14-day follow-up email sequence. Honest value: about $20 comparable. Why: makes the system stick past day one.\n(Example values, not real OTS data. Total honest value about $124, offered at $79.)",
+          "bonuses": "Bonus 1: A one-page 'How to support without nagging' guide for the guardian. Answers the objection 'How do I know it will stick after you leave?'\nBonus 2: A 10-minute midpoint check-in message during the 14 days. Answers the objection 'What if it stops getting used?'",
+          "guarantee": "Full refund within 14 days if it is not a fit. Organization coaching only. Not therapy, not tutoring. No promise of better grades."
+        }
+      }
+    }
+  ]
+}

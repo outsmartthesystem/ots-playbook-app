@@ -12,7 +12,14 @@ This README covers running the code. When a decision changes, update the plan fi
 - **P0 (walking skeleton): built.** Auth + roles, idempotent schema, content ingest from the
   playbook, student SPA (Home / Playbook / chapter / step with required done-note and park),
   admin cockpit v1 (student list, create demo student + claim link, activity timeline).
-- P1 (Binder + artifacts + review loop + Elena + onboarding): not built.
+- **P1 (Binder): built.** Typed artifacts with version history and pivot logging; the honesty
+  engine (BrandScript problems need a quote ref or an explicit "no source yet" flag; offer claims
+  need a proof source; D13 one-quote-per-bucket VoC gate); structured editors for chapters 1-3 and
+  a guided editor for 4-12; submit with the honesty-mirror confirm and the ON RECORD celebration;
+  Jay's review loop (queue, verify, return-with-note, acceptance-proof pane); the publish gate and
+  a gated `/api/publish`; artifact-gated progression; three-promises onboarding; Elena's read-only
+  demo binder. Adversarially reviewed (18 findings, all fixed, incl. a critical un-verify bug). The
+  honesty-engine logic has unit tests (`npm test`, 12 passing, no database needed).
 - P2 (parents + approvals + digests + scoreboard): not built.
 - P3a (question channel + safety core) / P3b (cockpit + Stripe provisioning): not built.
 - P4 (AI copilot): deferred per D4 until after P3b.

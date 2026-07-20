@@ -146,7 +146,7 @@ async function screenHome(){
         <div style="font-size:15px;margin:4px 0">Chapter ${cur.number}: ${esc(cur.chapter_title)}</div>
         <h1 style="color:#fff;margin:.2em 0">Next move</h1>
         <div style="margin:6px 0 14px">${esc(cur.title)}</div>
-        <a class="btn ghost" href="#/step/${esc(cur.stable_key)}" style="background:#fff">Do this move</a>
+        <a class="btn ghost" href="${cur.move_type==='artifact'?('#/artifact/'+esc(cur.kind)):('#/step/'+esc(cur.stable_key))}" style="background:#fff">Do this move</a>
       </div>`
       : `<div class="card hero"><h1 style="color:#fff">You are all caught up.</h1>
          <div class="muted">Every step is done or parked. Slow and real beats fast and fake.</div></div>`}
@@ -274,8 +274,8 @@ function renderTabs(active){
   if(!ME || ME.role!=='student'){ t.innerHTML=''; return; }
   const tab=(h,l,k)=>`<a class="${active===k?'active':''}" href="${h}">${l}</a>`;
   t.innerHTML = `<div class="tabs" style="position:fixed">
-    ${tab('#/','Home','home')}${tab('#/playbook','Playbook','playbook')}
-    <a href="#" onclick="logout();return false">Log out</a></div>`;
+    ${tab('#/','Home','home')}${tab('#/playbook','Playbook','playbook')}${tab('#/binder','Binder','binder')}
+    <a href="#" onclick="logout();return false" style="flex:1;text-align:center;padding:10px;font-size:12px;color:var(--muted)">Log out</a></div>`;
 }
 
 async function ensureMe(){
@@ -296,12 +296,23 @@ async function route(){
   try{
     if(me.role==='admin'){
       const sd = hash.match(/^#\/admin\/student\/(\d+)$/);
+      const rv = hash.match(/^#\/review\/(\d+)$/);
+      if(hash==='#/review') return screenReviewQueue();
+      if(rv) return screenReviewArtifact(rv[1]);
       if(sd) return screenAdminStudent(sd[1]);
       return screenAdmin();
     }
     // student
+    if(!me.has_onboarded && hash!=='#/onboarding'){ location.hash='#/onboarding'; return; }
+    if(hash==='#/onboarding') return screenOnboarding();
     const ch = hash.match(/^#\/chapter\/(.+)$/);
     const stp = hash.match(/^#\/step\/(.+)$/);
+    const av = hash.match(/^#\/artifact\/([^/]+)\/versions$/);
+    const ar = hash.match(/^#\/artifact\/([^/]+)$/);
+    if(av) return screenArtifactVersions(av[1]);
+    if(ar) return screenArtifact(ar[1]);
+    if(hash==='#/binder') return screenBinder();
+    if(hash==='#/elena') return screenElena();
     if(ch) return screenChapter(ch[1]);
     if(stp) return screenStep(stp[1]);
     if(hash==='#/playbook') return screenPlaybook();
@@ -314,5 +325,6 @@ async function route(){
 window.addEventListener('hashchange', route);
 window.addEventListener('load', async ()=>{ await renderBeta(); route(); });
 </script>
+<script src="/binder.js"></script>
 </body>
 </html>

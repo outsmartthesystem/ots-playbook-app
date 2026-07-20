@@ -188,6 +188,10 @@ async function screenChapter(key){
   renderTabs('playbook');
 }
 
+function actionsForChapter(n){
+  const map={1:['interview_done'],3:['offer_shown_to_adult'],4:['offer_shown_to_adult'],5:['page_shipped'],6:['email_sent_to_list'],7:['outreach_sent','reply_received','call_booked','sale_made'],8:['post_published'],9:['post_published'],11:['consent_collected']};
+  return map[n]||['outreach_sent','sale_made'];
+}
 async function screenStep(key){
   const { step, templates, progress } = await api('/api/steps/'+key);
   const st = progress ? progress.status : 'not_started';
@@ -198,6 +202,10 @@ async function screenStep(key){
     ${step.jay_md?`<h2>How Jay did it</h2><div class="card">${md(step.jay_md)}</div>`:''}
     ${templates.map(t=>`<h2>${esc(t.title||'Copy and adapt')}</h2><pre>${esc(t.body)}</pre>`).join('')}
     ${step.now_you_md?`<h2>Your move</h2><div class="card">${md(step.now_you_md)}</div>`:''}
+    ${step.kind==='action'?`<div class="card"><strong>Log what you actually did</strong>
+      <div class="muted" style="margin:4px 0 8px">Real actions only. This is what Jay watches, not reading.</div>
+      ${actionsForChapter(step.chapter_number).map(a=>`<button class="ghost" style="margin:4px 4px 0 0;font-size:13px" onclick="logAction('${a}','${esc(step.chapter_key)}')">${a.replace(/_/g,' ')}</button>`).join('')}
+    </div>`:''}
     <div class="card">
       <label>What did you actually do? (one sentence)</label>
       <textarea id="dn" rows="2" placeholder="I ...">${esc(progress&&progress.done_note||'')}</textarea>
@@ -260,7 +268,14 @@ async function screenAdminStudent(id){
   const { student, timeline } = await api('/api/admin/students/'+id);
   app.innerHTML = `<a class="muted" href="#/admin">&lsaquo; Cohort</a>
     <h1>${esc(student.first_name)} ${esc(student.last_initial||'')}</h1>
-    <div class="muted">${esc(student.account_state)}</div>
+    <div class="muted">${esc(student.account_state)} &middot; <a href="#/report/${id}">Application report</a></div>
+    <div class="card"><strong>Exports</strong>
+      <div><a href="#" onclick="downloadAuth('/api/admin/export/students.csv','students.csv');return false">students.csv</a> &middot;
+        <a href="#" onclick="downloadAuth('/api/admin/export/actions.csv','actions.csv');return false">actions.csv</a> &middot;
+        <a href="#" onclick="downloadAuth('/api/admin/export/scoreboard.csv','scoreboard.csv');return false">scoreboard.csv</a> &middot;
+        <a href="#" onclick="downloadAuth('/api/admin/export/approvals.csv','approvals.csv');return false">approvals.csv</a> &middot;
+        <a href="#" onclick="downloadAuth('/api/admin/export/artifacts.csv','artifacts.csv');return false">artifacts.csv</a> &middot;
+        <a href="#" onclick="downloadAuth('/api/admin/export/questions.csv','questions.csv');return false">questions.csv</a></div></div>
     <h2>Activity</h2>
     ${timeline.length? timeline.map(t=>`<div class="card">
       <div class="row"><strong class="grow">Ch ${t.chapter_number}: ${esc(t.title)}</strong>${statusPill(t.status)}</div>
@@ -303,10 +318,12 @@ async function route(){
       const sd = hash.match(/^#\/admin\/student\/(\d+)$/);
       const rv = hash.match(/^#\/review\/(\d+)$/);
       const it = hash.match(/^#\/inbox\/(\d+)$/);
+      const rp = hash.match(/^#\/report\/(\d+)$/);
       if(hash==='#/review') return screenReviewQueue();
       if(rv) return screenReviewArtifact(rv[1]);
       if(hash==='#/inbox') return screenInbox();
       if(it) return screenInboxThread(it[1]);
+      if(rp) return screenReport(rp[1]);
       if(sd) return screenAdminStudent(sd[1]);
       return screenAdmin();
     }

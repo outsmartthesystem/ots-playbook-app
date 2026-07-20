@@ -29,7 +29,11 @@ function renderParentTabs(active){
 /* ---------- parent ---------- */
 async function screenParentHome(){
   const { children } = await api('/api/parent/children');
+  let sales=[]; try{ sales=(await api('/api/parent/sales-to-confirm')).sales; }catch(_){}
   app.innerHTML=`<h1>Your teens</h1>
+    ${sales.length?`<div class="card hero"><strong style="color:#fff">A first sale to confirm</strong>
+      ${sales.map(s=>`<div style="margin:8px 0">${esc(s.first_name)} logged ${s.amount_cents?'$'+(s.amount_cents/100):'a sale'} on ${esc(s.occurred_on)}.
+        <button class="ghost" style="background:#fff;margin-top:6px" onclick="confirmSale(${s.id})">Confirm it happened</button></div>`).join('')}</div>`:''}
     ${children.length?children.map(c=>`<div class="station" onclick="location.hash='#/child/${c.id}'">
       <div><strong>${esc(c.first_name)} ${esc(c.last_initial||'')}</strong><div class="muted">${esc(c.account_state)}</div></div><span class="pill">&rsaquo;</span></div>`).join('')
       :'<p class="muted">No teen linked yet. Add yours below.</p>'}
@@ -261,4 +265,35 @@ async function answerQuestion(id){
   const body=val('ans');
   try{ await api('/api/admin/questions/'+id+'/reply',{method:'POST',body:JSON.stringify({body})}); location.hash='#/inbox'; }
   catch(e){ document.getElementById('ans_err').textContent=e.message; }
+}
+
+/* ---------- P3b: application report, actions, exports, first-dollar ---------- */
+async function downloadAuth(path, filename){
+  const res = await fetch(path, { headers: (typeof TOKEN!=='undefined'&&TOKEN)?{Authorization:'Bearer '+TOKEN}:{} });
+  if(!res.ok){ alert('Export failed'); return; }
+  const text = await res.text();
+  const blob = new Blob([text], {type: filename.endsWith('.csv')?'text/csv':'text/markdown'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+}
+async function logAction(kind, chapterKey){
+  const body={ action_kind:kind, chapter_key:chapterKey||null };
+  if(kind==='sale_made'){ const amt=prompt('How much was the sale, in dollars? (a real number only)'); if(amt===null) return; body.amount_dollars=amt; }
+  try{ const r=await api('/api/me/actions',{method:'POST',body:JSON.stringify(body)});
+    alert(r.bell?'Logged. Your parent will confirm it, and Jay will hear about it. Real numbers only.':'Logged.');
+  }catch(e){ alert(e.message); }
+}
+async function confirmSale(id){ try{ await api('/api/parent/actions/'+id+'/confirm-sale',{method:'POST',body:'{}'}); screenParentHome(); }catch(e){ alert(e.message); } }
+async function screenReport(id){
+  const d=await api('/api/admin/students/'+id+'/report');
+  const arrow = d.momentum==='up'?'&uarr; building':d.momentum==='down'?'&darr; slowing':'&rarr; steady';
+  app.innerHTML=`<a class="muted" href="#/admin/student/${id}">&lsaquo; Back</a>
+    <h1>${esc(d.student.first_name)}: application report</h1>
+    <div class="muted">Momentum: ${arrow}</div>
+    <div class="card"><strong>Reading</strong><div class="muted">${d.reading.steps_done} steps done &middot; ${d.reading.docs_submitted} documents submitted &middot; ${d.reading.docs_verified} verified by you</div></div>
+    <div class="card"><strong>Applying</strong> <span class="muted" style="font-size:12px">self-reported</span>
+      ${d.applying.length?d.applying.map(a=>`<div>${esc(a.action_kind.replace(/_/g,' '))}: <strong>${a.n}</strong>${a.cents?` ($${a.cents/100})`:''}</div>`).join(''):'<div class="muted">No real-world actions logged yet. Reading is not doing.</div>'}</div>
+    ${d.first_dollar?`<div class="card hero"><strong style="color:#fff">First dollar: ${d.first_dollar.amount_cents?'$'+(d.first_dollar.amount_cents/100):'logged'}</strong><div class="muted">${d.first_dollar.confirmed_at?'Parent-confirmed.':'Waiting on parent confirmation.'}</div></div>`:''}
+    <div class="card"><strong>Actions per week</strong>${d.weekly.length?d.weekly.map(w=>`<div>${esc(w.wk)}: ${w.n}</div>`).join(''):'<div class="muted">none yet</div>'}</div>
+    <p class="muted">${esc(d.note)}</p>`;
+  renderTabs();
 }

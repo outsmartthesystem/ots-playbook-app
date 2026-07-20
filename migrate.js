@@ -357,6 +357,22 @@ const STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status)`,
   `CREATE INDEX IF NOT EXISTS idx_replies_question ON question_replies(question_id)`,
 
+  // --- P3b: the application report (real-world actions) ---
+  `CREATE TABLE IF NOT EXISTS actions_log (
+    id SERIAL PRIMARY KEY,
+    student_id INT NOT NULL REFERENCES users(id),
+    chapter_id INT REFERENCES chapters(id),
+    action_kind TEXT NOT NULL,                    -- fixed enum (see lib below); self-reported
+    qty INT NOT NULL DEFAULT 1,
+    amount_cents INT,                             -- for sale_made
+    note TEXT,
+    occurred_on DATE NOT NULL DEFAULT CURRENT_DATE,
+    confirmed_by INT REFERENCES users(id),        -- parent one-tap confirm on sale_made rows
+    confirmed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_actions_student ON actions_log(student_id)`,
+
   // helpful indexes
   `CREATE INDEX IF NOT EXISTS idx_approvals_student ON approvals(student_id)`,
   `CREATE INDEX IF NOT EXISTS idx_approvals_parent ON approvals(parent_id)`,

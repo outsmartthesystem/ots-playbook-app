@@ -59,6 +59,20 @@ services:
       - key: DIGEST_DRY
         value: "1"
 
+  - type: cron
+    name: ots-playbook-admin-digest
+    runtime: node
+    schedule: "0 13 * * 1"         # Monday 13:00 UTC ~ 6am America/Phoenix
+    buildCommand: npm install
+    startCommand: node adminDigest.js
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ots-playbook-db
+          property: connectionString
+      - key: DIGEST_DRY
+        value: "1"
+
 databases:
   - name: ots-playbook-db
     plan: basic-256mb

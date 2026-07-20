@@ -14,6 +14,7 @@
     "ingest": "node ingest.js",
     "createAdmin": "node createAdmin.js",
     "digest": "node digest.js",
+    "adminDigest": "node adminDigest.js",
     "reminders": "node reminders.js",
     "test": "node --test"
   },

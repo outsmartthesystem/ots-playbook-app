@@ -38,6 +38,8 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(compression());
 app.use(cors());
+// Stripe needs the RAW body for signature verification, so mount it BEFORE express.json().
+app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '256kb' }));
 
 const LAUNCH_MODE = process.env.LAUNCH_MODE || 'preview';
@@ -71,7 +73,8 @@ app.get('/health', h(async (req, res) => {
   const missingCounsel = LAUNCH_MODE === 'production' ? COUNSEL_KEYS.filter((k) => !process.env[k]) : [];
   // backup-responder health gate (plan 5.2.6 / 6.6): production needs a responder AND a backup
   const missingResponders = LAUNCH_MODE === 'production' ? ['SAFETY_ALERT_TO', 'SAFETY_ALERT_BACKUP_TO'].filter((k) => !process.env[k]) : [];
-  const ready = missingCounsel.length === 0 && missingResponders.length === 0;
+  const missingStripe = LAUNCH_MODE === 'production' && !process.env.STRIPE_WEBHOOK_SECRET ? ['STRIPE_WEBHOOK_SECRET'] : [];
+  const ready = missingCounsel.length === 0 && missingResponders.length === 0 && missingStripe.length === 0;
   let db = 'unknown';
   try { await query('SELECT 1'); db = 'ok'; } catch (_) { db = 'error'; }
   res.status(ready && db === 'ok' ? 200 : 503).json({
@@ -81,6 +84,7 @@ app.get('/health', h(async (req, res) => {
     counsel_signoff_complete: missingCounsel.length === 0,
     missing_counsel_signoffs: missingCounsel,
     missing_responders: missingResponders,
+    missing_stripe: missingStripe,
     db,
   });
 }));
@@ -1145,6 +1149,202 @@ app.get('/api/parent/children/:id/questions', authRequired(), requireRole('paren
     threads.push({ id: q.id, body: q.body, created_at: q.created_at, replies: reps.map((r) => ({ body: r.body })) });
   }
   res.json({ threads, note: 'You see coursework questions and answers. Anything a safety check set aside is not shown here.' });
+}));
+
+// ================= P3b: application report, first-dollar, exports, Stripe =================
+const ACTION_KINDS = ['interview_done', 'voc_sheet_updated', 'offer_shown_to_adult', 'page_shipped', 'email_sent_to_list', 'outreach_sent', 'reply_received', 'call_booked', 'sale_made', 'post_published', 'scoreboard_week_logged', 'consent_collected'];
+// copies the outsmart-app csvCell exactly: neutralize spreadsheet formula injection,
+// then quote for commas/quotes/newlines. Student free text (names, dial_in) flows here.
+function csvCell(v) { let s = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+
+// student logs a real-world action (self-reported)
+app.post('/api/me/actions', authRequired(), requireRole('student'), h(async (req, res) => {
+  const kind = (req.body && req.body.action_kind || '').trim();
+  if (!ACTION_KINDS.includes(kind)) return res.status(400).json({ error: 'unknown action' });
+  const qty = Math.max(1, parseInt(req.body.qty || 1, 10) || 1);
+  const note = (req.body.note || '').trim().slice(0, 300) || null;
+  let amount = null;
+  if (kind === 'sale_made' && req.body.amount_dollars != null && String(req.body.amount_dollars).trim() !== '') {
+    const f = parseFloat(req.body.amount_dollars); amount = Number.isNaN(f) ? null : Math.round(f * 100);
+  }
+  let chapterId = null;
+  if (req.body.chapter_key) { const { rows } = await query(`SELECT id FROM chapters WHERE stable_key=$1`, [req.body.chapter_key]); if (rows[0]) chapterId = rows[0].id; }
+  const { rows } = await query(
+    `INSERT INTO actions_log (student_id, chapter_id, action_kind, qty, amount_cents, note, occurred_on)
+     VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7::date,CURRENT_DATE)) RETURNING id`,
+    [req.user.id, chapterId, kind, qty, amount, note, req.body.occurred_on || null]
+  );
+  await logEvent({ student_id: req.user.id, actor_id: req.user.id, type: 'action_logged', entity_type: 'action', entity_id: rows[0].id, detail: { kind, qty } });
+  if (kind === 'sale_made') {
+    // First-Dollar Bell (manual): notify Jay and the linked parent (parent one-tap confirms it happened)
+    await query(`INSERT INTO notifications (user_id, kind, body) SELECT id,'first_dollar',$1 FROM users WHERE role='admin' AND deleted_at IS NULL`,
+      [`${req.user.first_name} logged a sale${amount ? ' of $' + (amount / 100) : ''}. Congratulate them personally, on the next call or by email.`]);
+    const { rows: ps } = await query(`SELECT parent_id FROM family_links WHERE student_id=$1 AND status='active'`, [req.user.id]);
+    for (const pr of ps) await notify(pr.parent_id, 'first_dollar', `${req.user.first_name} says they made a sale. Tap to confirm it happened.`, '#/');
+  }
+  res.json({ ok: true, id: rows[0].id, bell: kind === 'sale_made' });
+}));
+
+app.get('/api/me/actions', authRequired(), requireRole('student'), h(async (req, res) => {
+  const { rows } = await query(`SELECT action_kind, qty, amount_cents, note, occurred_on, confirmed_at FROM actions_log WHERE student_id=$1 ORDER BY occurred_on DESC, id DESC LIMIT 50`, [req.user.id]);
+  res.json({ actions: rows, kinds: ACTION_KINDS });
+}));
+
+// the application report: reading progress vs real-world applying, never blended (plan 3.3 / 5.1)
+app.get('/api/admin/students/:id/report', authRequired(), requireRole('admin'), h(async (req, res) => {
+  const sid = parseInt(req.params.id, 10);
+  const { rows: u } = await query(`SELECT first_name, last_initial FROM users WHERE id=$1 AND role='student'`, [sid]);
+  if (!u[0]) return res.status(404).json({ error: 'not found' });
+  const { rows: reading } = await query(
+    `SELECT (SELECT count(*) FROM progress WHERE student_id=$1 AND status='done')::int AS steps_done,
+            (SELECT count(*) FROM artifacts WHERE student_id=$1 AND status IN ('submitted','verified'))::int AS docs_submitted,
+            (SELECT count(*) FROM artifacts WHERE student_id=$1 AND status='verified')::int AS docs_verified`, [sid]);
+  const { rows: applying } = await query(`SELECT action_kind, sum(qty)::int AS n, sum(COALESCE(amount_cents,0))::int AS cents FROM actions_log WHERE student_id=$1 GROUP BY action_kind ORDER BY action_kind`, [sid]);
+  const { rows: weekly } = await query(`SELECT to_char(date_trunc('week',occurred_on),'YYYY-MM-DD') AS wk, count(*)::int AS n FROM actions_log WHERE student_id=$1 AND occurred_on >= CURRENT_DATE - INTERVAL '8 weeks' GROUP BY 1 ORDER BY 1`, [sid]);
+  const { rows: mom } = await query(
+    `SELECT count(*) FILTER (WHERE occurred_on >= date_trunc('week',CURRENT_DATE))::int AS this_wk,
+            count(*) FILTER (WHERE occurred_on >= date_trunc('week',CURRENT_DATE) - INTERVAL '7 days' AND occurred_on < date_trunc('week',CURRENT_DATE))::int AS last_wk
+       FROM actions_log WHERE student_id=$1`, [sid]);
+  const { rows: fd } = await query(`SELECT id, occurred_on, amount_cents, confirmed_at FROM actions_log WHERE student_id=$1 AND action_kind='sale_made' ORDER BY occurred_on LIMIT 1`, [sid]);
+  const momentum = mom[0].this_wk > mom[0].last_wk ? 'up' : mom[0].this_wk < mom[0].last_wk ? 'down' : 'flat';
+  res.json({ student: u[0], reading: reading[0], applying, weekly, momentum, first_dollar: fd[0] || null, note: 'Every applying number is self-reported by the student.' });
+}));
+
+// parent confirms a logged sale (First-Dollar Bell). Writes confirmed_by/at on the row.
+app.get('/api/parent/sales-to-confirm', authRequired(), requireRole('parent'), h(async (req, res) => {
+  const { rows } = await query(
+    `SELECT a.id, a.amount_cents, a.occurred_on, u.first_name
+       FROM actions_log a JOIN users u ON u.id=a.student_id
+       JOIN family_links f ON f.student_id=a.student_id AND f.parent_id=$1 AND f.status='active'
+      WHERE a.action_kind='sale_made' AND a.confirmed_at IS NULL ORDER BY a.occurred_on DESC`, [req.user.id]);
+  res.json({ sales: rows });
+}));
+app.post('/api/parent/actions/:id/confirm-sale', authRequired(), requireRole('parent'), h(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { rows } = await query(
+    `SELECT a.student_id FROM actions_log a JOIN family_links f ON f.student_id=a.student_id AND f.parent_id=$1 AND f.status='active'
+      WHERE a.id=$2 AND a.action_kind='sale_made'`, [req.user.id, id]);
+  if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  await query(`UPDATE actions_log SET confirmed_by=$1, confirmed_at=now() WHERE id=$2 AND confirmed_at IS NULL`, [req.user.id, id]);
+  await query(`INSERT INTO notifications (user_id, kind, body) SELECT id,'first_dollar_confirmed',$1 FROM users WHERE role='admin' AND deleted_at IS NULL`, [`A parent confirmed a first sale for ${rows[0].student_id}.`]);
+  res.json({ ok: true });
+}));
+
+// binder export (markdown) + copy-my-brief (closes chapter 12's loop)
+app.get('/api/me/binder/export', authRequired(), requireRole('student'), h(async (req, res) => {
+  const { rows } = await query(`SELECT a.kind, a.data, a.status, c.number FROM artifacts a LEFT JOIN chapters c ON c.id=a.chapter_id WHERE a.student_id=$1 ORDER BY c.number NULLS LAST`, [req.user.id]);
+  let md = `# My Business Binder\n\nExported ${new Date().toISOString().slice(0, 10)}. This is your work. You leave with everything.\n\n`;
+  for (const a of rows) md += `## ${a.kind.replace(/_/g, ' ')} (${a.status})\n\n\`\`\`json\n${JSON.stringify(a.data, null, 2)}\n\`\`\`\n\n`;
+  res.type('text/markdown').send(md);
+}));
+app.get('/api/me/brief', authRequired(), requireRole('student'), h(async (req, res) => {
+  const { rows } = await query(`SELECT data FROM artifacts WHERE student_id=$1 AND kind='standing_brief'`, [req.user.id]);
+  const b = (rows[0] && rows[0].data && rows[0].data.sections) || {};
+  const md = `# MY STANDING BRIEF (paste this into any AI chat, first, every session)\n\n`
+    + `## Who I am\n${b.who_i_am || '[fill this in]'}\n\n`
+    + `## My files\n- MY-OFFER is the single source of truth for my product, price, and promise. If anything disagrees with it, it wins.\n\n`
+    + `## Hard rules\n${b.hard_rules || 'Never fabricate. Verify before publishing. No fake scarcity. Education, not advice. A trusted adult is in the loop for money and accounts. I read everything before it ships.'}\n`;
+  res.type('text/markdown').send(md);
+}));
+
+// CSV exports (audit-logged; quarantined question text is never exported)
+async function auditExport(actorId, file) { await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES ($1,'export',$2)`, [actorId, JSON.stringify({ file })]); }
+app.get('/api/admin/export/students.csv', authRequired(), requireRole('admin'), h(async (req, res) => {
+  await auditExport(req.user.id, 'students');
+  const { rows } = await query(`SELECT u.id, u.first_name, u.last_initial, u.account_state, u.call_group, (SELECT count(*) FROM artifacts a WHERE a.student_id=u.id AND a.status='verified') AS verified FROM users u WHERE role='student' AND deleted_at IS NULL ORDER BY u.id`);
+  const out = ['id,first_name,last_initial,account_state,call_group,verified_docs'].concat(rows.map((r) => [r.id, r.first_name, r.last_initial, r.account_state, r.call_group, r.verified].map(csvCell).join(',')));
+  res.type('text/csv').send(out.join('\n'));
+}));
+app.get('/api/admin/export/actions.csv', authRequired(), requireRole('admin'), h(async (req, res) => {
+  await auditExport(req.user.id, 'actions');
+  const { rows } = await query(`SELECT student_id, action_kind, qty, amount_cents, occurred_on, confirmed_at FROM actions_log ORDER BY id`);
+  const out = ['student_id,action_kind,qty,amount_cents,occurred_on,confirmed_at'].concat(rows.map((r) => [r.student_id, r.action_kind, r.qty, r.amount_cents, r.occurred_on, r.confirmed_at].map(csvCell).join(',')));
+  res.type('text/csv').send(out.join('\n'));
+}));
+app.get('/api/admin/export/scoreboard.csv', authRequired(), requireRole('admin'), h(async (req, res) => {
+  await auditExport(req.user.id, 'scoreboard');
+  const { rows } = await query(`SELECT student_id, week_start, clicks, leads, paid, revenue_cents, leak, learning, dial_in FROM scoreboard_weeks ORDER BY student_id, week_start`);
+  const out = ['student_id,week_start,clicks,leads,paid,revenue_cents,leak,learning,dial_in'].concat(rows.map((r) => [r.student_id, r.week_start, r.clicks, r.leads, r.paid, r.revenue_cents, r.leak, r.learning, r.dial_in].map(csvCell).join(',')));
+  res.type('text/csv').send(out.join('\n'));
+}));
+app.get('/api/admin/export/approvals.csv', authRequired(), requireRole('admin'), h(async (req, res) => {
+  await auditExport(req.user.id, 'approvals');
+  const { rows } = await query(`SELECT id, student_id, checkpoint_key, status, created_at, resolved_at FROM approvals ORDER BY id`);
+  const out = ['id,student_id,checkpoint_key,status,created_at,resolved_at'].concat(rows.map((r) => [r.id, r.student_id, r.checkpoint_key, r.status, r.created_at, r.resolved_at].map(csvCell).join(',')));
+  res.type('text/csv').send(out.join('\n'));
+}));
+app.get('/api/admin/export/artifacts.csv', authRequired(), requireRole('admin'), h(async (req, res) => {
+  await auditExport(req.user.id, 'artifacts');
+  const { rows } = await query(`SELECT id, student_id, kind, status, current_version, submitted_at, reviewed_at FROM artifacts ORDER BY id`);
+  const out = ['id,student_id,kind,status,current_version,submitted_at,reviewed_at'].concat(rows.map((r) => [r.id, r.student_id, r.kind, r.status, r.current_version, r.submitted_at, r.reviewed_at].map(csvCell).join(',')));
+  res.type('text/csv').send(out.join('\n'));
+}));
+// questions export: SLA/metadata ONLY, coursework (class=QUESTION) only. Never a body; quarantined rows excluded entirely.
+app.get('/api/admin/export/questions.csv', authRequired(), requireRole('admin'), h(async (req, res) => {
+  await auditExport(req.user.id, 'questions');
+  const { rows } = await query(`SELECT id, student_id, qtype, status, created_at, first_response_at, answered_at FROM questions WHERE class='QUESTION' ORDER BY id`);
+  const out = ['id,student_id,qtype,status,created_at,first_response_at,answered_at'].concat(rows.map((r) => [r.id, r.student_id, r.qtype, r.status, r.created_at, r.first_response_at, r.answered_at].map(csvCell).join(',')));
+  res.type('text/csv').send(out.join('\n'));
+}));
+
+// ----- the app's OWN additive Stripe webhook (own secret; the site's webhook is untouched) -----
+const MASTERMIND_KEYS = new Set(['entrepreneurship-program', 'investing-mastermind']); // read live from sites\outsmartthesystem-site
+function verifyStripeSig(rawBuf, sigHeader, secret) {
+  if (!sigHeader || !secret) return false;
+  const parts = Object.fromEntries(String(sigHeader).split(',').map((kv) => kv.split('=')));
+  if (!parts.t || !parts.v1) return false;
+  const expected = crypto.createHmac('sha256', secret).update(`${parts.t}.${rawBuf.toString('utf8')}`).digest('hex');
+  try { return crypto.timingSafeEqual(Buffer.from(parts.v1), Buffer.from(expected)); } catch (_) { return false; }
+}
+app.post('/webhooks/stripe', h(async (req, res) => {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  const production = (process.env.LAUNCH_MODE || 'preview') === 'production';
+  // fail closed in production: never accept an unsigned event
+  if (production && !secret) return res.status(503).json({ error: 'webhook secret not configured' });
+  const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
+  if (secret && !verifyStripeSig(raw, req.headers['stripe-signature'], secret)) return res.status(400).json({ error: 'bad signature' });
+  let evt; try { evt = JSON.parse(raw.toString('utf8')); } catch (_) { return res.status(400).json({ error: 'bad json' }); }
+  if (evt.type !== 'checkout.session.completed') return res.json({ received: true, ignored: evt.type });
+  const s = evt.data.object || {};
+  if (s.payment_status && s.payment_status !== 'paid' && s.payment_status !== 'no_payment_required') return res.json({ received: true, ignored: 'unpaid' });
+  const routeKey = (s.client_reference_id || (s.metadata && s.metadata.product) || '').toString().trim();
+  const email = ((s.customer_details && s.customer_details.email) || s.customer_email || '').toLowerCase();
+  const sessionId = s.id || null;
+  if (!MASTERMIND_KEYS.has(routeKey)) {
+    // side-hustle etc. take NO provisioning action (D1), just a log
+    await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_logged',$1)`, [JSON.stringify({ routeKey, sessionId, email })]);
+    return res.json({ received: true, logged: true, provisioned: false });
+  }
+  // mastermind provisioning requires a session id (for idempotency) and a real email; else log for manual handling
+  if (!sessionId || !email) {
+    await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_needs_manual',$1)`, [JSON.stringify({ routeKey, sessionId, email: email || null })]);
+    return res.json({ received: true, provisioned: false, needs_manual: true });
+  }
+  const preview = !production;
+  let setupUrl = null; let enrolled = false;
+  await tx(async (client) => {
+    const { rows: par } = await client.query(`SELECT id FROM users WHERE email=$1`, [email]);
+    let parentId = par[0] ? par[0].id : null;
+    if (!parentId) { const { rows } = await client.query(`INSERT INTO users (role, email, account_state) VALUES ('parent',$1,'created') RETURNING id`, [email]); parentId = rows[0].id; }
+    // the enrollment write IS the idempotency point: a replay hits ON CONFLICT and no-ops
+    const { rows: enr } = await client.query(
+      `INSERT INTO enrollments (parent_id, program, source, stripe_session_id, status) VALUES ($1,'mastermind_995','stripe',$2,'active')
+       ON CONFLICT (stripe_session_id) DO NOTHING RETURNING id`, [parentId, sessionId]
+    );
+    if (!enr[0]) return; // replay
+    enrolled = true;
+    const token = randomToken();
+    await client.query(`INSERT INTO invites (kind, token_hash, target_user_id, expires_at) VALUES ('parent_setup',$1,$2,$3)`, [hashToken(token), parentId, new Date(Date.now() + 7 * 864e5)]);
+    setupUrl = `${process.env.APP_URL || 'http://localhost:3000'}/#/parent-setup/${token}`;
+  });
+  if (!enrolled) return res.json({ received: true, idempotent: true });
+  if (preview) {
+    await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_provisioned_preview',$1)`, [JSON.stringify({ routeKey, email, setupUrl })]);
+    console.log(`[stripe:preview] would email parent setup link to ${email}: ${setupUrl}`);
+  } else {
+    await sendEmail({ to: email, subject: 'Set up your Outsmart the System parent account', text: `You are in. Set your password and add your teen: ${setupUrl}`, html: null });
+  }
+  res.json({ received: true, provisioned: true, preview });
 }));
 
 // one-click digest unsubscribe (HMAC, plan 3.2). Matches digest.js token.

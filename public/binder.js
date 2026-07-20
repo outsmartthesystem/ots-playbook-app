@@ -13,7 +13,12 @@ async function screenBinder(){
     ${binder.map(b=>`<div class="station" onclick="location.hash='#/artifact/${b.kind}'">
       <div><strong>Ch ${b.chapter}: ${esc(prettyKind(b.kind))}</strong>
         ${b.open_flag_count?`<div class="muted">${b.open_flag_count} flag to resolve</div>`:''}</div>
-      ${statusPill(b.status||'not_started')}</div>`).join('')}`;
+      ${statusPill(b.status||'not_started')}</div>`).join('')}
+    <div class="card"><strong>Take it with you</strong>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost grow" onclick="downloadAuth('/api/me/binder/export','my-business-binder.md')">Export my binder</button>
+        <button class="ghost grow" onclick="downloadAuth('/api/me/brief','my-standing-brief.md')">Copy my brief</button>
+      </div></div>`;
   renderTabs('binder');
 }
 

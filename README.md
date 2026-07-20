@@ -40,7 +40,24 @@ This README covers running the code. When a decision changes, update the plan fi
   (`test/redteam.test.js`) proves the fail-closed and keyword-net properties with no database.
   Adversarially reviewed (10 findings, all fixed, incl. a CRITICAL thread-visibility leak on a serious
   reply). Tests: 17 passing.
-- P3b (cockpit + Stripe provisioning): not built.
+- **P3b (cockpit + Stripe provisioning): built.** The application report (reading progress vs
+  self-reported real-world actions, never blended; momentum arrow; first-dollar), one-tap action
+  logging on action steps, the parent-confirmed First-Dollar Bell (writes confirmed_by/at), binder
+  export (markdown) + "Copy my brief", six audit-logged CSV exports with formula-injection-safe cells
+  and no quarantined text, and `adminDigest.js`. The app's OWN additive Stripe webhook
+  (`POST /webhooks/stripe`, own secret, manual signature verify, fail-closed in production, atomic
+  `ON CONFLICT` idempotency, mastermind-only per D1, log-only in preview) provisions a parent +
+  enrollment on a paid entrepreneurship-program / investing-mastermind checkout. The site's webhook and
+  GHL are untouched. Adversarially reviewed (5 findings, all fixed, incl. a CRITICAL CSV-injection bug).
+  Tests: 17 passing.
+
+## The production gate (a decision, not a build task)
+
+Everything above is built. Before real students, per plan 5.6: set the four `COUNSEL_SIGNOFF_*` vars
+after counsel signs off on ToS/Privacy/minors-messaging/mandatory-reporting; set `SAFETY_ALERT_BACKUP_TO`
+and `STRIPE_WEBHOOK_SECRET`; run the red-team harness against the LIVE classifier and archive it; flip
+`QUESTIONS_ENABLED=1`; do a live test purchase end to end; re-verify the do-not-touch list. Then set
+`LAUNCH_MODE=production`. `/health` reports `ready:false` until those are in place.
 - P4 (AI copilot): deferred per D4 until after P3b.
 
 ## Locked decisions (2026-07-20)

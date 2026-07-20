@@ -90,7 +90,7 @@ app.get('/health', h(async (req, res) => {
 }));
 
 app.get('/version', (req, res) => {
-  res.json({ app: 'ots-playbook-app', phase: 'P0', launch_mode: LAUNCH_MODE });
+  res.json({ app: 'ots-playbook-app', phase: 'P3b', launch_mode: LAUNCH_MODE });
 });
 
 // ---------- auth ----------

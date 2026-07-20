@@ -193,7 +193,7 @@ function actionsForChapter(n){
   return map[n]||['outreach_sent','sale_made'];
 }
 async function screenStep(key){
-  const { step, templates, progress } = await api('/api/steps/'+key);
+  const { step, templates, progress } = await api('/api/steps/'+encodeURIComponent(key));
   const st = progress ? progress.status : 'not_started';
   app.innerHTML = `<a class="muted" href="#/chapter/${esc(step.chapter_key)}">&lsaquo; Chapter ${step.chapter_number}</a>
     <h1>${esc(step.title)}</h1>
@@ -220,7 +220,7 @@ async function screenStep(key){
 }
 async function markDone(key){
   const note=document.getElementById('dn').value.trim();
-  try{ await api('/api/steps/'+key+'/done',{method:'POST',body:JSON.stringify({done_note:note})});
+  try{ await api('/api/steps/'+encodeURIComponent(key)+'/done',{method:'POST',body:JSON.stringify({done_note:note})});
     history.back();
   }catch(e){ document.getElementById('st_err').textContent=e.message; }
 }
@@ -232,7 +232,7 @@ function showPark(key){
 }
 async function doPark(key){
   const reason=document.getElementById('pr').value.trim();
-  try{ await api('/api/steps/'+key+'/park',{method:'POST',body:JSON.stringify({parked_reason:reason})});
+  try{ await api('/api/steps/'+encodeURIComponent(key)+'/park',{method:'POST',body:JSON.stringify({parked_reason:reason})});
     history.back();
   }catch(e){ document.getElementById('st_err').textContent=e.message; }
 }

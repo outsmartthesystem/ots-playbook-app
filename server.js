@@ -159,18 +159,22 @@ app.get('/api/chapters/:key', authRequired(), h(async (req, res) => {
   );
   // merge student progress if the caller is a student
   let progress = {};
+  let checkState = {};
   if (req.user.role === 'student') {
     const { rows: pr } = await query(
       `SELECT s.stable_key, p.status FROM progress p JOIN steps s ON s.id = p.step_id WHERE p.student_id = $1`,
       [req.user.id]
     );
     progress = Object.fromEntries(pr.map((r) => [r.stable_key, r.status]));
+    const { rows: cp } = await query(`SELECT checklist_key, checked FROM checklist_progress WHERE student_id = $1`, [req.user.id]);
+    checkState = Object.fromEntries(cp.map((r) => [r.checklist_key, r.checked]));
   }
   res.json({ chapter: {
     stable_key: ch.stable_key, number: ch.number, title: ch.title,
     walk_away: ch.walk_away, rough_time: ch.rough_time,
     congrats_video_url: ch.congrats_video_url, body_sections: ch.body_sections,
-  }, steps: steps.map((s) => ({ ...s, status: progress[s.stable_key] || 'not_started' })), checklist });
+  }, steps: steps.map((s) => ({ ...s, status: progress[s.stable_key] || 'not_started' })),
+    checklist: checklist.map((c) => ({ ...c, checked: !!checkState[c.stable_key] })) });
 }));
 
 app.get('/api/steps/:key', authRequired(), h(async (req, res) => {
@@ -181,9 +185,13 @@ app.get('/api/steps/:key', authRequired(), h(async (req, res) => {
   );
   const step = rows[0];
   if (!step) return res.status(404).json({ error: 'step not found' });
+  // Templates attached to THIS step, plus any chapter-wide ones (step_id NULL).
+  // (Before a re-ingest populates step_id, all templates are NULL -> chapter-wide,
+  // which preserves the prior behavior; after re-ingest they scope to their step.)
   const { rows: templates } = await query(
-    `SELECT stable_key, title, body, body_form, is_worksheet FROM templates WHERE step_id = $1 OR stable_key LIKE $2`,
-    [step.id, `${step.chapter_key}/template/%`]
+    `SELECT stable_key, title, body, body_form, is_worksheet FROM templates
+      WHERE step_id = $1 OR (step_id IS NULL AND chapter_id = $2) ORDER BY id`,
+    [step.id, step.chapter_id]
   );
   let progress = null;
   if (req.user.role === 'student') {
@@ -239,6 +247,21 @@ app.post('/api/steps/:key/park', authRequired(), requireRole('student'), h(async
   );
   await logEvent({ student_id: req.user.id, actor_id: req.user.id, type: 'step_parked', entity_type: 'step', entity_id: step.id, detail: { stable_key: step.stable_key, reason } });
   res.json({ ok: true, status: 'parked' });
+}));
+
+// Interactive "Check your work" items: toggle one checklist item for this student.
+app.post('/api/checklist/:key/toggle', authRequired(), requireRole('student'), h(async (req, res) => {
+  const key = req.params.key;
+  const checked = !!(req.body && req.body.checked);
+  const { rows } = await query(`SELECT 1 FROM checklist_items WHERE stable_key = $1`, [key]);
+  if (!rows[0]) return res.status(404).json({ error: 'checklist item not found' });
+  await query(
+    `INSERT INTO checklist_progress (student_id, checklist_key, checked, updated_at)
+     VALUES ($1,$2,$3, now())
+     ON CONFLICT (student_id, checklist_key) DO UPDATE SET checked=$3, updated_at=now()`,
+    [req.user.id, key, checked]
+  );
+  res.json({ ok: true, checked });
 }));
 
 // "You are here" + next move. Progression is ARTIFACT-gated (plan 4.3): a chapter

@@ -250,25 +250,30 @@ async function writeToDb(parsed, gitHash, force) {
         [ch.stable_key, ch.number, ch.title, ch.walk_away, ch.rough_time, JSON.stringify(ch.body_sections), ch.source_hash]
       );
       const chapterId = rows[0].id;
+      const stepIdByPos = {};
       for (const s of ch.steps) {
-        await client.query(
+        const { rows: sr } = await client.query(
           `INSERT INTO steps (stable_key, chapter_id, position, title, kind, teach_md, jay_md, now_you_md,
              evidence_fields, artifact_section, acceptance_proof, source_hash, is_active)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,TRUE)
            ON CONFLICT (stable_key) DO UPDATE SET chapter_id=$2, position=$3, title=$4, kind=$5,
              teach_md=$6, jay_md=$7, now_you_md=$8, evidence_fields=$9, artifact_section=$10,
              content_updated_at = CASE WHEN steps.source_hash IS DISTINCT FROM $12 THEN now() ELSE steps.content_updated_at END,
-             source_hash=$12, is_active=TRUE`,
+             source_hash=$12, is_active=TRUE
+           RETURNING id`,
           [s.stable_key, chapterId, s.position, s.title, s.kind, s.teach_md, s.jay_md, s.now_you_md,
            s.evidence_fields ? JSON.stringify(s.evidence_fields) : null, s.artifact_section, null, ch.source_hash]
         );
+        stepIdByPos[s.position] = sr[0].id;
       }
       for (const t of ch.templates) {
+        // link each template to its step (t.step_position); NULL = chapter-wide.
+        const stepId = (t.step_position != null && stepIdByPos[t.step_position]) || null;
         await client.query(
-          `INSERT INTO templates (stable_key, chapter_id, title, body, body_form, is_worksheet)
-           VALUES ($1,$2,$3,$4,$5,$6)
-           ON CONFLICT (stable_key) DO UPDATE SET chapter_id=$2, title=$3, body=$4, body_form=$5, is_worksheet=$6`,
-          [t.stable_key, chapterId, t.title, t.body, t.body_form, t.is_worksheet]
+          `INSERT INTO templates (stable_key, chapter_id, step_id, title, body, body_form, is_worksheet)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT (stable_key) DO UPDATE SET chapter_id=$2, step_id=$3, title=$4, body=$5, body_form=$6, is_worksheet=$7`,
+          [t.stable_key, chapterId, stepId, t.title, t.body, t.body_form, t.is_worksheet]
         );
       }
       for (const ci of ch.checklist) {

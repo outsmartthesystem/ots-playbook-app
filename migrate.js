@@ -154,6 +154,15 @@ const STATEMENTS = [
     UNIQUE (student_id, step_id)
   )`,
 
+  // per-student checklist item state (the "Check your work" items become interactive)
+  `CREATE TABLE IF NOT EXISTS checklist_progress (
+    student_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    checklist_key TEXT NOT NULL,
+    checked BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (student_id, checklist_key)
+  )`,
+
   // append-only activity log; THIS TABLE is the application report (plan 6.3)
   `CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,

@@ -188,7 +188,7 @@ async function screenChapter(key){
     ${steps.map(s=>`<div class="station" onclick="location.hash='#/step/${esc(s.stable_key)}'">
       <div><strong>${esc(s.title)}</strong> <span class="muted">(${esc(s.kind)})</span></div>
       ${statusPill(s.status)}</div>`).join('')}
-    ${checklist.length?`<h2>Check your work</h2><div class="card">${checklist.map(ci=>`<div>&#9633; ${esc(ci.text)}</div>`).join('')}</div>`:''}
+    ${checklist.length?`<h2>Check your work</h2><div class="card">${checklist.map(ci=>`<label style="display:flex;gap:8px;align-items:flex-start;padding:5px 0;font-weight:400;cursor:pointer"><input type="checkbox" style="width:auto;margin-top:3px" ${ci.checked?'checked':''} onchange="toggleCheck('${esc(ci.stable_key)}',this)"><span>${esc(ci.text)}</span></label>`).join('')}</div>`:''}
     ${_extras.length?`<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--muted);padding:6px 0">More on this chapter</summary>${_extras.map(s=>`<div class="card"><strong>${esc(s.heading)}</strong>${md(s.md)}</div>`).join('')}</details>`:''}`;
   renderTabs('playbook');
 }
@@ -222,6 +222,11 @@ async function screenStep(key){
       <p id="st_err" class="err"></p>
     </div>`;
   renderTabs('playbook');
+}
+async function toggleCheck(key, el){
+  const checked = el.checked;
+  try{ await api('/api/checklist/'+encodeURIComponent(key)+'/toggle',{method:'POST',body:JSON.stringify({checked})}); }
+  catch(e){ el.checked = !checked; }
 }
 async function markDone(key){
   const note=document.getElementById('dn').value.trim();

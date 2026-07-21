@@ -1346,7 +1346,11 @@ app.post('/webhooks/stripe', h(async (req, res) => {
   let evt; try { evt = JSON.parse(raw.toString('utf8')); } catch (_) { return res.status(400).json({ error: 'bad json' }); }
   if (evt.type !== 'checkout.session.completed') return res.json({ received: true, ignored: evt.type });
   const s = evt.data.object || {};
-  if (s.payment_status && s.payment_status !== 'paid' && s.payment_status !== 'no_payment_required') return res.json({ received: true, ignored: 'unpaid' });
+  // Economic-terms verification (audit P0-5): only a live, actually-paid checkout provisions.
+  // In production, reject test-mode events. Reject comp/no_payment_required and unpaid outright
+  // (complimentary access is a deliberate admin grant, not an auto-provision).
+  if (production && evt.livemode !== true) return res.json({ received: true, ignored: 'not_livemode' });
+  if (s.payment_status !== 'paid') return res.json({ received: true, ignored: 'not_paid' });
   const routeKey = (s.client_reference_id || (s.metadata && s.metadata.product) || '').toString().trim();
   const email = ((s.customer_details && s.customer_details.email) || s.customer_email || '').toLowerCase();
   const sessionId = s.id || null;
@@ -1360,10 +1364,18 @@ app.post('/webhooks/stripe', h(async (req, res) => {
     await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_needs_manual',$1)`, [JSON.stringify({ routeKey, sessionId, email: email || null })]);
     return res.json({ received: true, provisioned: false, needs_manual: true });
   }
+  // reject $0/comp and non-USD; if STRIPE_MASTERMIND_AMOUNT_CENTS is set, require an exact match.
+  const expectCents = parseInt(process.env.STRIPE_MASTERMIND_AMOUNT_CENTS || '', 10);
+  if ((s.currency && s.currency !== 'usd') || !(typeof s.amount_total === 'number' && s.amount_total > 0) || (!Number.isNaN(expectCents) && s.amount_total !== expectCents)) {
+    await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_amount_rejected',$1)`,
+      [JSON.stringify({ routeKey, sessionId, amount_total: s.amount_total, currency: s.currency, expected: Number.isNaN(expectCents) ? null : expectCents })]);
+    return res.json({ received: true, provisioned: false, amount_rejected: true });
+  }
   const preview = !production;
-  let setupUrl = null; let enrolled = false;
+  let setupUrl = null; let enrolled = false; let roleConflict = false;
   await tx(async (client) => {
-    const { rows: par } = await client.query(`SELECT id FROM users WHERE email=$1`, [email]);
+    const { rows: par } = await client.query(`SELECT id, role FROM users WHERE email=$1 AND deleted_at IS NULL`, [email]);
+    if (par[0] && par[0].role !== 'parent') { roleConflict = true; return; } // never attach an enrollment/parent-setup to a student or admin identity
     let parentId = par[0] ? par[0].id : null;
     if (!parentId) { const { rows } = await client.query(`INSERT INTO users (role, email, account_state) VALUES ('parent',$1,'created') RETURNING id`, [email]); parentId = rows[0].id; }
     // the enrollment write IS the idempotency point: a replay hits ON CONFLICT and no-ops
@@ -1377,6 +1389,10 @@ app.post('/webhooks/stripe', h(async (req, res) => {
     await client.query(`INSERT INTO invites (kind, token_hash, target_user_id, expires_at) VALUES ('parent_setup',$1,$2,$3)`, [hashToken(token), parentId, new Date(Date.now() + 7 * 864e5)]);
     setupUrl = `${process.env.APP_URL || 'http://localhost:3000'}/#/parent-setup/${token}`;
   });
+  if (roleConflict) {
+    await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_role_conflict',$1)`, [JSON.stringify({ routeKey, sessionId, email })]);
+    return res.json({ received: true, provisioned: false, role_conflict: true });
+  }
   if (!enrolled) return res.json({ received: true, idempotent: true });
   if (preview) {
     await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_provisioned_preview',$1)`, [JSON.stringify({ routeKey, email, setupUrl })]);

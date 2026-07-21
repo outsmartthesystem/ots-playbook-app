@@ -20,14 +20,7 @@ function nonEmpty(v) { return v != null && String(v).trim() !== ''; }
 
 // The starter publish gate: the 00 non-negotiables (plan 4.4). Swapped for the
 // student's own rules-file definition after chapter 11.
-const GATE_DEFINITION = [
-  { q: 'Nothing here is fabricated: no made-up numbers, quotes, reviews, or results.' },
-  { q: 'Every claim is something I can prove. Anything I cannot prove is flagged "verify before publishing".' },
-  { q: 'No fake scarcity and no fake urgency. Any limit or deadline is real and I will honor it.' },
-  { q: 'Education, not advice. No income promises and no promised results.' },
-  { q: 'Consent: any real person in this has given permission (a parent too if they are under 18).' },
-  { q: 'A trusted adult is in the loop for anything with money or accounts.' },
-];
+const { GATE_DEFINITION, evaluateGate } = require('./lib/gate');
 
 async function notify(userId, kind, body, link) {
   try { await query(`INSERT INTO notifications (user_id, kind, body, link) VALUES ($1,$2,$3,$4)`, [userId, kind, body, link || null]); }
@@ -557,14 +550,14 @@ app.post('/api/gate-runs', authRequired(), requireRole('student'), h(async (req,
   const ref = (req.body && req.body.published_thing_ref || '').trim();
   const answers = (req.body && req.body.answers) || [];
   if (!ref) return res.status(400).json({ error: 'what are you publishing?' });
-  const passed = answers.length >= GATE_DEFINITION.length && answers.every((a) => a.result === 'pass' || a.result === 'na');
+  const { passed, results, blocked } = evaluateGate(answers);
   const { rows } = await query(
     `INSERT INTO gate_runs (student_id, published_thing_ref, answers, passed) VALUES ($1,$2,$3,$4) RETURNING id, passed, created_at`,
-    [req.user.id, ref, JSON.stringify(answers), passed]
+    [req.user.id, ref, JSON.stringify(results), passed]
   );
-  await logEvent({ student_id: req.user.id, actor_id: req.user.id, type: 'gate_run', entity_type: 'gate_run', entity_id: rows[0].id, detail: { ref, passed } });
-  res.json({ ok: true, passed, run: rows[0],
-    message: passed ? 'Gate passed. Clear to publish.' : 'Gate blocked this. Fix the failed lines, then run it again. A blocked bad post is a win.' });
+  await logEvent({ student_id: req.user.id, actor_id: req.user.id, type: 'gate_run', entity_type: 'gate_run', entity_id: rows[0].id, detail: { ref, passed, blocked } });
+  res.json({ ok: true, passed, blocked, run: rows[0],
+    message: passed ? 'Gate passed. Clear to publish.' : 'Gate blocked this. Every honesty line must pass (consent and adult-in-loop can be N/A only when they truly do not apply). Fix the flagged lines, then run it again. A blocked bad post is a win.' });
 }));
 
 // gated publish: refuse to mark a thing published unless its LATEST gate run passed

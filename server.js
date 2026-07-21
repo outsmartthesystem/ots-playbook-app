@@ -30,7 +30,22 @@ async function notify(userId, kind, body, link) {
 const app = express();
 app.set('trust proxy', 1);
 app.use(compression());
-app.use(cors());
+// CORS restricted to the app's own origins (SPA + API are same-origin, so this
+// cannot break same-origin calls; it only blocks other sites' browser requests).
+const APP_ORIGINS = [process.env.APP_URL, 'https://ots-playbook-app.onrender.com', 'http://localhost:3000'].filter(Boolean);
+app.use(cors({ origin: APP_ORIGINS, credentials: false }));
+// Baseline security headers (audit P0-7). CSP keeps 'unsafe-inline' for now because
+// the SPA uses inline scripts/handlers; it still restricts sources, framing, base-uri,
+// and form-action. Removing 'unsafe-inline' needs the inline-JS refactor (a later wave).
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+  if ((process.env.LAUNCH_MODE || 'preview') === 'production') res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
 // Stripe needs the RAW body for signature verification, so mount it BEFORE express.json().
 app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '256kb' }));
@@ -1430,8 +1445,10 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 async function boot() {
+  // Migration failure is FATAL (audit P0-4): never serve on a half-migrated DB.
+  // A failed deploy keeps the previous healthy version live on Render.
   try { await migrate(); console.log('[boot] migrate ok'); }
-  catch (err) { console.error('[boot] migrate failed', err.message); }
+  catch (err) { console.error('[boot] migrate failed, exiting', err.message); process.exit(1); }
   app.listen(PORT, () => {
     console.log(`[boot] ots-playbook-app listening on ${PORT} (LAUNCH_MODE=${LAUNCH_MODE}, QUESTIONS_ENABLED=${QUESTIONS_ENABLED})`);
   });

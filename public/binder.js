@@ -279,8 +279,11 @@ function screenOnboarding(){
   renderTabs();
 }
 async function acceptPromises(){
-  try{ const r=await api('/api/onboarding/promises',{method:'POST',body:JSON.stringify({})});
-    if(ME) ME.has_onboarded=true; celebrate(r.on_record);
+  try{ await api('/api/onboarding/promises',{method:'POST',body:JSON.stringify({})});
+    if(ME) ME.has_onboarded=true;
+    // After the promises, land on the guided home ("You are here / your next move"),
+    // not a premature "first document" celebration or the raw binder list.
+    if(location.hash==='#/') route(); else location.hash='#/';
   }catch(e){ document.getElementById('ob_err').textContent=e.message; }
 }
 

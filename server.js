@@ -868,7 +868,17 @@ app.get('/api/parent/approvals', authRequired(), requireRole('parent'), h(async 
       [r.id, req.user.id, req.ip, (req.headers['user-agent'] || '').slice(0, 300)]
     );
   }
-  res.json({ approvals: rows.map((r) => ({ ...r, text: (family.CHECKPOINTS_BY_KEY[r.checkpoint_key] || {}).text })) });
+  // resolved sign-offs (approved/declined/revoked): history + a revoke path for approved ones
+  const { rows: hist } = await query(
+    `SELECT a.id, a.checkpoint_key, a.subject_ref, a.status, a.note, a.resolved_at, u.first_name, a.student_id
+       FROM approvals a JOIN users u ON u.id = a.student_id
+       JOIN family_links f ON f.student_id = a.student_id AND f.parent_id = $1 AND f.status='active'
+      WHERE a.status IN ('approved','declined','revoked') ORDER BY a.resolved_at DESC NULLS LAST LIMIT 50`, [req.user.id]
+  );
+  res.json({
+    approvals: rows.map((r) => ({ ...r, text: (family.CHECKPOINTS_BY_KEY[r.checkpoint_key] || {}).text })),
+    history: hist.map((r) => ({ ...r, text: (family.CHECKPOINTS_BY_KEY[r.checkpoint_key] || {}).text })),
+  });
 }));
 
 app.post('/api/parent/approvals/:id/:action', authRequired(), requireRole('parent'), h(async (req, res) => {

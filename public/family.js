@@ -43,6 +43,7 @@ async function screenParentHome(){
 }
 async function screenParentChild(id){
   const d=await api('/api/parent/children/'+id);
+  let q={threads:[],note:''}; try{ q=await api('/api/parent/children/'+id+'/questions'); }catch(_){}
   app.innerHTML=`<a class="muted" href="#/">&lsaquo; Your teens</a>
     <h1>${esc(d.student.first_name)}</h1>
     <div class="muted">${d.documents_submitted} of 12 documents submitted. Last activity: ${d.last_activity?new Date(d.last_activity).toLocaleDateString():'none yet'}.</div>
@@ -51,6 +52,9 @@ async function screenParentChild(id){
     <h2>Documents</h2>
     ${d.artifacts.length?d.artifacts.map(a=>`<div class="station" onclick="location.hash='#/child/${id}/doc/${a.kind}'">
       <div><strong>${esc(a.kind.replace(/_/g,' '))}</strong></div>${statusPill(a.status)}</div>`).join(''):'<p class="muted">Nothing submitted yet.</p>'}
+    <h2>Coursework questions <span class="muted" style="font-size:12px">what your teen asked Jay</span></h2>
+    ${q.threads.length?q.threads.map(t=>`<div class="card"><div class="muted" style="font-size:12px">${new Date(t.created_at).toLocaleString()}</div><p>${esc(t.body)}</p>
+      ${t.replies.map(r=>`<div style="margin:6px 0;padding:8px;background:var(--panel);border-radius:6px">${esc(r.body)}</div>`).join('')}</div>`).join(''):`<p class="muted">${esc(q.note||'No coursework questions yet.')}</p>`}
     <h2>Scoreboard <span class="muted" style="font-size:12px">self-reported by your teen</span></h2>
     ${d.scoreboard.length?sparkTable(d.scoreboard):'<p class="muted">The scoreboard starts in Chapter 10. Nothing to show yet, and that is normal.</p>'}
     <p class="foot"><a href="#/what-parent-sees">What you can see</a></p>`;
@@ -65,15 +69,23 @@ async function screenParentDoc(id,kind){
   renderParentTabs();
 }
 async function screenParentApprovals(){
-  const { approvals } = await api('/api/parent/approvals');
+  const { approvals, history } = await api('/api/parent/approvals');
   app.innerHTML=`<h1>Sign-offs</h1>
+    <h2>Waiting on you</h2>
     ${approvals.length?approvals.map(a=>`<div class="card"><strong>${esc(a.first_name)}</strong><p>${esc(a.text)}</p>
       ${a.subject_ref?`<div class="muted">About: ${esc(a.subject_ref)}</div>`:''}
       ${a.release_reference?`<div class="muted">Release reference: ${esc(a.release_reference)}</div>`:''}
       <textarea id="note_${a.id}" rows="2" placeholder="note (required to say not yet)"></textarea>
       <div class="row"><button class="grow" onclick="decideApproval(${a.id},'approve')">Approve</button>
         <button class="ghost" onclick="decideApproval(${a.id},'decline')">Not yet</button></div>
-      <div id="err_${a.id}" class="err"></div></div>`).join(''):'<p class="muted">Nothing waiting. Nice.</p>'}`;
+      <div id="err_${a.id}" class="err"></div></div>`).join(''):'<p class="muted">Nothing waiting. Nice.</p>'}
+    ${(history&&history.length)?`<h2>History</h2>
+      ${history.map(a=>`<div class="card"><div class="row"><strong class="grow">${esc(a.first_name)} &middot; ${esc(a.text||a.checkpoint_key)}</strong>${statusPill(a.status)}</div>
+        ${a.subject_ref?`<div class="muted">About: ${esc(a.subject_ref)}</div>`:''}
+        ${a.note?`<div class="muted">Your note: ${esc(a.note)}</div>`:''}
+        ${a.resolved_at?`<div class="muted" style="font-size:12px">${new Date(a.resolved_at).toLocaleDateString()}</div>`:''}
+        ${a.status==='approved'?`<button class="ghost" style="margin-top:8px" onclick="if(confirm('Revoke this sign-off? Your teen and Jay will be told.'))decideApproval(${a.id},'revoke')">Revoke this sign-off</button>`:''}
+      </div>`).join('')}`:''}`;
   renderParentTabs('approvals');
 }
 async function decideApproval(id,action){

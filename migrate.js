@@ -66,11 +66,16 @@ const STATEMENTS = [
     program TEXT NOT NULL CHECK (program IN ('mastermind_995','side_hustle_97','manual_grant')),
     source TEXT NOT NULL CHECK (source IN ('stripe','admin_invite')),
     stripe_session_id TEXT UNIQUE,
+    stripe_subscription_id TEXT,
+    stripe_customer_id TEXT,
     status TEXT NOT NULL DEFAULT 'active'
       CHECK (status IN ('active','paused','completed','refunded')),
     started_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
+  // subscription-lifecycle columns for existing databases (idempotent)
+  `ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT`,
+  `ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`,
 
   // --- content (populated by ingest.js) ---
   `CREATE TABLE IF NOT EXISTS content_versions (

@@ -1364,6 +1364,29 @@ function verifyStripeSig(rawBuf, sigHeader, secret) {
   const expected = crypto.createHmac('sha256', secret).update(`${parts.t}.${rawBuf.toString('utf8')}`).digest('hex');
   try { return crypto.timingSafeEqual(Buffer.from(parts.v1), Buffer.from(expected)); } catch (_) { return false; }
 }
+// Subscription lifecycle: a cancellation, payment failure, or refund pauses the
+// enrollment and freezes the linked student to read-only (the app's "paused =
+// read-only, never deleted" policy). Enrollment is found by subscription id, then
+// customer id. Fires only if these events are added to the Stripe endpoint.
+async function pauseEnrollmentAndStudent(client, enr, newStatus) {
+  await client.query(`UPDATE enrollments SET status=$1 WHERE id=$2`, [newStatus, enr.id]);
+  if (enr.student_id) await client.query(`UPDATE users SET account_state='paused' WHERE id=$1 AND role='student' AND account_state<>'closed'`, [enr.student_id]);
+}
+async function handleStripeLifecycle(evt) {
+  const o = evt.data.object || {};
+  let subId = null; let custId = null; let newStatus = 'paused';
+  if (evt.type === 'customer.subscription.deleted') { subId = o.id; custId = o.customer; }
+  else if (evt.type === 'invoice.payment_failed') { subId = o.subscription; custId = o.customer; }
+  else if (evt.type === 'charge.refunded') { custId = o.customer; newStatus = 'refunded'; }
+  let enr = null;
+  if (subId) { const { rows } = await query(`SELECT id, student_id FROM enrollments WHERE stripe_subscription_id=$1 AND status='active' LIMIT 1`, [subId]); enr = rows[0]; }
+  if (!enr && custId) { const { rows } = await query(`SELECT id, student_id FROM enrollments WHERE stripe_customer_id=$1 AND status='active' LIMIT 1`, [custId]); enr = rows[0]; }
+  if (!enr) { await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_lifecycle_no_match',$1)`, [JSON.stringify({ type: evt.type, subId, custId })]); return { matched: false }; }
+  await tx(async (client) => { await pauseEnrollmentAndStudent(client, enr, newStatus); });
+  await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_lifecycle',$1)`, [JSON.stringify({ type: evt.type, enrollment: enr.id, newStatus })]);
+  await query(`INSERT INTO notifications (user_id, kind, body) SELECT id,'enrollment_paused',$1 FROM users WHERE role='admin' AND deleted_at IS NULL`, [`Enrollment ${enr.id} -> ${newStatus} (Stripe ${evt.type}). The teen's access is now read-only.`]);
+  return { matched: true };
+}
 app.post('/webhooks/stripe', h(async (req, res) => {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   const production = (process.env.LAUNCH_MODE || 'preview') === 'production';
@@ -1372,12 +1395,17 @@ app.post('/webhooks/stripe', h(async (req, res) => {
   const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
   if (secret && !verifyStripeSig(raw, req.headers['stripe-signature'], secret)) return res.status(400).json({ error: 'bad signature' });
   let evt; try { evt = JSON.parse(raw.toString('utf8')); } catch (_) { return res.status(400).json({ error: 'bad json' }); }
+  // In production, reject test-mode events for ALL event types.
+  if (production && evt.livemode !== true) return res.json({ received: true, ignored: 'not_livemode' });
+  // Subscription lifecycle (fires only if these events are added to the Stripe endpoint).
+  if (['customer.subscription.deleted', 'invoice.payment_failed', 'charge.refunded'].includes(evt.type)) {
+    const r = await handleStripeLifecycle(evt);
+    return res.json({ received: true, lifecycle: true, matched: r.matched });
+  }
   if (evt.type !== 'checkout.session.completed') return res.json({ received: true, ignored: evt.type });
   const s = evt.data.object || {};
-  // Economic-terms verification (audit P0-5): only a live, actually-paid checkout provisions.
-  // In production, reject test-mode events. Reject comp/no_payment_required and unpaid outright
-  // (complimentary access is a deliberate admin grant, not an auto-provision).
-  if (production && evt.livemode !== true) return res.json({ received: true, ignored: 'not_livemode' });
+  // Economic-terms verification (audit P0-5): only an actually-paid checkout provisions.
+  // Reject comp/no_payment_required and unpaid (complimentary access is a deliberate admin grant).
   if (s.payment_status !== 'paid') return res.json({ received: true, ignored: 'not_paid' });
   const routeKey = (s.client_reference_id || (s.metadata && s.metadata.product) || '').toString().trim();
   const email = ((s.customer_details && s.customer_details.email) || s.customer_email || '').toLowerCase();
@@ -1408,8 +1436,9 @@ app.post('/webhooks/stripe', h(async (req, res) => {
     if (!parentId) { const { rows } = await client.query(`INSERT INTO users (role, email, account_state) VALUES ('parent',$1,'created') RETURNING id`, [email]); parentId = rows[0].id; }
     // the enrollment write IS the idempotency point: a replay hits ON CONFLICT and no-ops
     const { rows: enr } = await client.query(
-      `INSERT INTO enrollments (parent_id, program, source, stripe_session_id, status) VALUES ($1,'mastermind_995','stripe',$2,'active')
-       ON CONFLICT (stripe_session_id) DO NOTHING RETURNING id`, [parentId, sessionId]
+      `INSERT INTO enrollments (parent_id, program, source, stripe_session_id, stripe_subscription_id, stripe_customer_id, status)
+       VALUES ($1,'mastermind_995','stripe',$2,$3,$4,'active')
+       ON CONFLICT (stripe_session_id) DO NOTHING RETURNING id`, [parentId, sessionId, s.subscription || null, s.customer || null]
     );
     if (!enr[0]) return; // replay
     enrolled = true;

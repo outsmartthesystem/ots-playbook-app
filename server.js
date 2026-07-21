@@ -760,6 +760,14 @@ app.post('/api/parent/add-teen', authRequired(), requireRole('parent'), h(async 
   if (!first || Number.isNaN(age)) return res.status(400).json({ error: 'first name and age required' });
   if (age < 13) return res.status(400).json({ error: AGE_GATE_COPY });
   const isAdult = age >= 18;
+  // Seat limit: each $995 enrollment covers ONE teen (Jay 2026-07-21). Require an
+  // active enrollment with an open seat before creating the student.
+  const { rows: seat } = await query(
+    `SELECT count(*)::int AS open FROM enrollments WHERE parent_id=$1 AND status='active' AND student_id IS NULL`, [req.user.id]
+  );
+  if (seat[0].open < 1) {
+    return res.status(409).json({ error: 'Your program covers one teen, and that seat is already taken. Adding another teen needs a separate enrollment.' });
+  }
   const { rows } = await query(
     `INSERT INTO users (role, first_name, last_initial, age_at_signup, username, is_adult_student, account_state)
      VALUES ('student',$1,$2,$3,$4,$5,'created') RETURNING *`,
@@ -1343,7 +1351,12 @@ app.get('/api/admin/export/questions.csv', authRequired(), requireRole('admin'),
 }));
 
 // ----- the app's OWN additive Stripe webhook (own secret; the site's webhook is untouched) -----
-const MASTERMIND_KEYS = new Set(['entrepreneurship-program', 'investing-mastermind']); // read live from sites\outsmartthesystem-site
+// ONLY the Entrepreneurship Program provisions the Playbook app. The Investing
+// Mastermind is a SEPARATE, unbundled $995 program (Jay 2026-07-21): its checkouts
+// are logged, not provisioned here. Stripe Price IDs (subscriptions):
+//   entrepreneurship = price_1TsAipD8njyhfncGPP6nP4zz
+//   investing        = price_1TsAjTD8njyhfncGok9o8Srz
+const PLAYBOOK_PROGRAM_KEY = 'entrepreneurship-program';
 function verifyStripeSig(rawBuf, sigHeader, secret) {
   if (!sigHeader || !secret) return false;
   const parts = Object.fromEntries(String(sigHeader).split(',').map((kv) => kv.split('=')));
@@ -1369,8 +1382,8 @@ app.post('/webhooks/stripe', h(async (req, res) => {
   const routeKey = (s.client_reference_id || (s.metadata && s.metadata.product) || '').toString().trim();
   const email = ((s.customer_details && s.customer_details.email) || s.customer_email || '').toLowerCase();
   const sessionId = s.id || null;
-  if (!MASTERMIND_KEYS.has(routeKey)) {
-    // side-hustle etc. take NO provisioning action (D1), just a log
+  if (routeKey !== PLAYBOOK_PROGRAM_KEY) {
+    // investing-mastermind, side-hustle, etc. take NO provisioning action here, just a log
     await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_logged',$1)`, [JSON.stringify({ routeKey, sessionId, email })]);
     return res.json({ received: true, logged: true, provisioned: false });
   }
@@ -1380,7 +1393,7 @@ app.post('/webhooks/stripe', h(async (req, res) => {
     return res.json({ received: true, provisioned: false, needs_manual: true });
   }
   // reject $0/comp and non-USD; if STRIPE_MASTERMIND_AMOUNT_CENTS is set, require an exact match.
-  const expectCents = parseInt(process.env.STRIPE_MASTERMIND_AMOUNT_CENTS || '', 10);
+  const expectCents = parseInt(process.env.STRIPE_MASTERMIND_AMOUNT_CENTS || '99500', 10); // $995
   if ((s.currency && s.currency !== 'usd') || !(typeof s.amount_total === 'number' && s.amount_total > 0) || (!Number.isNaN(expectCents) && s.amount_total !== expectCents)) {
     await query(`INSERT INTO admin_audit_log (actor_id, action, detail) VALUES (NULL,'stripe_amount_rejected',$1)`,
       [JSON.stringify({ routeKey, sessionId, amount_total: s.amount_total, currency: s.currency, expected: Number.isNaN(expectCents) ? null : expectCents })]);

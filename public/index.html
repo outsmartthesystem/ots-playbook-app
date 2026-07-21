@@ -67,7 +67,7 @@ function md(t){
   return blocks.map(b=>{
     if(/^```/.test(b)){ return '<pre>'+esc(b.replace(/^```.*\n?|\n?```$/g,''))+'</pre>'; }
     if(/^\s*[-*]\s+/.test(b)){
-      const items=b.split('\n').filter(l=>l.trim()).map(l=>'<li>'+inline(l.replace(/^\s*[-*]\s+/,''))+'</li>').join('');
+      const items=b.split('\n').filter(l=>l.trim()).map(l=>'<li>'+inline(esc(l.replace(/^\s*[-*]\s+/,'')))+'</li>').join('');
       return '<ul>'+items+'</ul>';
     }
     return '<p>'+inline(esc(b))+'</p>';

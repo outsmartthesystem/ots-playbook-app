@@ -13,6 +13,33 @@ function clearDraft(kind){ try{ localStorage.removeItem(draftKey(kind)); }catch(
 function scheduleDraftSave(){ clearTimeout(_draftTimer); _draftTimer=setTimeout(saveDraft, 600); }
 function discardDraft(){ if(!window._art) return; clearDraft(window._art.kind); if(window._art.serverData!==undefined) window._art.data=window._art.serverData; window._art.restoredDraft=false; window._art.serverData=undefined; render_art(); }
 
+// ---------- human-readable artifact rendering (no raw JSON for teens/parents/coach) ----------
+function labelize(k){ return String(k).replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()); }
+function humanizeVal(v){
+  if(v==null||v==='') return '';
+  if(typeof v==='boolean') return v?'Yes':'No';
+  if(typeof v==='number') return esc(String(v));
+  if(typeof v==='string') return esc(v).replace(/\n/g,'<br>');
+  if(Array.isArray(v)){
+    const items=v.filter(x=>x!=null&&x!=='');
+    if(!items.length) return '';
+    if(items.every(x=>typeof x!=='object')) return '<ul>'+items.map(x=>'<li>'+humanizeVal(x)+'</li>').join('')+'</ul>';
+    return items.map(x=>'<div class="card" style="margin:6px 0;background:rgba(0,0,0,.02)">'+humanizeObj(x)+'</div>').join('');
+  }
+  if(typeof v==='object') return humanizeObj(v);
+  return esc(String(v));
+}
+function humanizeObj(o){
+  if(o==null||typeof o!=='object') return humanizeVal(o);
+  return Object.keys(o).map(k=>{ const inner=humanizeVal(o[k]); if(!inner) return '';
+    return '<div style="margin:5px 0"><div class="muted" style="font-size:12px">'+esc(labelize(k))+'</div><div>'+inner+'</div></div>'; }).filter(Boolean).join('');
+}
+function humanizeArtifact(data){
+  if(data==null) return '<p class="muted">Nothing here yet.</p>';
+  if(typeof data==='string') return '<p>'+esc(data).replace(/\n/g,'<br>')+'</p>';
+  return humanizeObj(data)||'<p class="muted">Nothing here yet.</p>';
+}
+
 // ---------- binder list ----------
 async function screenBinder(){
   const { binder } = await api('/api/me/binder');
@@ -234,7 +261,7 @@ async function screenElena(){
     <h1>Elena's example</h1>
     <div class="card" style="border-color:var(--accent2)">${esc(e.label)}</div>
     ${(e.artifacts||[]).map(a=>`<div class="card"><strong>${esc(prettyKind(a.kind))}</strong>
-      <pre style="user-select:none">${esc(typeof a.data==='string'?a.data:JSON.stringify(a.data,null,2))}</pre></div>`).join('')
+      <div style="user-select:none">${humanizeArtifact(a.data)}</div></div>`).join('')
       || '<p class="muted">Elena&#39;s example binder is being finalized.</p>'}
     <p class="muted">These are Elena&#39;s answers. Do not copy them. Your real ones will be better because they are true.</p>`;
   renderTabs('binder');
@@ -276,7 +303,7 @@ async function screenReviewArtifact(id){
     <h1>${esc(a.first_name)}: ${esc(prettyKind(a.kind))} ${statusPill(a.status)}</h1>
     ${d.acceptance_proof?`<div class="card" style="border-color:var(--accent)"><strong>Check for:</strong> ${esc(d.acceptance_proof)}</div>`:''}
     ${a.open_flag_count?`<div class="card" style="border-color:var(--accent2)">${a.open_flag_count} open "verify before publishing" flag(s).</div>`:''}
-    <div class="card"><pre>${esc(JSON.stringify(a.data,null,2))}</pre></div>
+    <div class="card">${humanizeArtifact(a.data)}</div>
     ${d.pivots.length?`<h2>Pivots</h2>${d.pivots.map(p=>`<div class="card"><strong>${esc(p.field)}</strong>: ${esc(p.old_value)} &rarr; ${esc(p.new_value)}<div class="muted">${esc(p.reason)}</div></div>`).join('')}`:''}
     <div class="card">
       <label>Return note (min 20 chars). Snippets:</label>

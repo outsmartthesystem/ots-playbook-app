@@ -58,9 +58,9 @@ async function screenParentChild(id){
 }
 async function screenParentDoc(id,kind){
   const d=await api('/api/parent/artifact/'+id+'/'+kind);
-  app.innerHTML=`<a class="muted" href="#/child/${id}">&lsaquo; Back</a><h1>${esc(kind.replace(/_/g,' '))}</h1>
+  app.innerHTML=`<a class="muted" href="#/child/${id}">&lsaquo; Back</a><h1>${esc(kind.replace(/_/g,' '))} ${typeof statusPill==='function'?statusPill(d.artifact.status||'not_started'):''}</h1>
     ${d.artifact.review_note?`<div class="card" style="border-color:var(--accent2)"><strong>Jay&#39;s note:</strong> ${esc(d.artifact.review_note)}</div>`:''}
-    <div class="card"><pre>${esc(JSON.stringify(d.artifact.data,null,2))}</pre></div>
+    <div class="card">${humanizeArtifact(d.artifact.data)}</div>
     <p class="muted">You are reading your teen&#39;s work. You cannot edit it here, and that is by design.</p>`;
   renderParentTabs();
 }

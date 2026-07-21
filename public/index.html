@@ -176,15 +176,20 @@ async function screenPlaybook(){
 
 async function screenChapter(key){
   const { chapter, steps, checklist } = await api('/api/chapters/'+key);
+  const _bs = chapter.body_sections||[];
+  const _intro = _bs.filter(s=>s.heading==='intro');
+  const _extras = _bs.filter(s=>s.heading!=='intro');
   app.innerHTML = `<a class="muted" href="#/playbook">&lsaquo; All chapters</a>
     <h1>${chapter.number}. ${esc(chapter.title)}</h1>
     <p class="muted"><strong>You walk away with:</strong> ${esc(chapter.walk_away||'')}</p>
     <p class="muted">${esc(chapter.rough_time||'')}</p>
+    ${_intro.map(s=>`<div class="card">${md(s.md)}</div>`).join('')}
     <h2>Steps</h2>
     ${steps.map(s=>`<div class="station" onclick="location.hash='#/step/${esc(s.stable_key)}'">
       <div><strong>${esc(s.title)}</strong> <span class="muted">(${esc(s.kind)})</span></div>
       ${statusPill(s.status)}</div>`).join('')}
-    ${checklist.length?`<h2>Check your work</h2><div class="card">${checklist.map(ci=>`<div>&#9633; ${esc(ci.text)}</div>`).join('')}</div>`:''}`;
+    ${checklist.length?`<h2>Check your work</h2><div class="card">${checklist.map(ci=>`<div>&#9633; ${esc(ci.text)}</div>`).join('')}</div>`:''}
+    ${_extras.length?`<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--muted);padding:6px 0">More on this chapter</summary>${_extras.map(s=>`<div class="card"><strong>${esc(s.heading)}</strong>${md(s.md)}</div>`).join('')}</details>`:''}`;
   renderTabs('playbook');
 }
 

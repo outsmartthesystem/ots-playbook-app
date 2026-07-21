@@ -5,6 +5,14 @@
 function prettyKind(k){ return String(k).replace(/_/g,' '); }
 function setDeep(obj, path, val){ const ks=path.split('.'); let o=obj; for(let i=0;i<ks.length-1;i++){ o[ks[i]]=o[ks[i]]||{}; o=o[ks[i]]; } o[ks[ks.length-1]]=val; }
 
+// ---------- autosave / draft recovery (so a refresh or crash never loses work) ----------
+function draftKey(kind){ return 'otsdraft:'+((typeof ME!=='undefined'&&ME&&ME.id)||'me')+':'+kind; }
+let _draftTimer=null;
+function saveDraft(){ try{ if(window._art) localStorage.setItem(draftKey(window._art.kind), JSON.stringify(window._art.data||{})); }catch(_){} }
+function clearDraft(kind){ try{ localStorage.removeItem(draftKey(kind)); }catch(_){} }
+function scheduleDraftSave(){ clearTimeout(_draftTimer); _draftTimer=setTimeout(saveDraft, 600); }
+function discardDraft(){ if(!window._art) return; clearDraft(window._art.kind); if(window._art.serverData!==undefined) window._art.data=window._art.serverData; window._art.restoredDraft=false; window._art.serverData=undefined; render_art(); }
+
 // ---------- binder list ----------
 async function screenBinder(){
   const { binder } = await api('/api/me/binder');
@@ -29,6 +37,15 @@ async function screenArtifact(kind){
   let quotes = [];
   if(kind==='brandscript'){ try{ quotes=(await api('/api/me/quotes')).quotes; }catch(_){}
     window._art.quotes = quotes; }
+  // Draft recovery: restore unsaved local edits if the doc is still editable.
+  if(d.artifact.status!=='submitted' && d.artifact.status!=='verified'){
+    try{ const raw=localStorage.getItem(draftKey(kind));
+      if(raw){ const draft=JSON.parse(raw);
+        if(JSON.stringify(draft)!==JSON.stringify(window._art.data)){ window._art.serverData=window._art.data; window._art.data=draft; window._art.restoredDraft=true; }
+        else { clearDraft(kind); }
+      }
+    }catch(_){}
+  }
   render_art();
 }
 function render_art(){
@@ -43,6 +60,7 @@ function render_art(){
     <h1>${esc(prettyKind(kind))} ${statusPill(status)}</h1>
     <div class="row"><a class="muted grow" href="#/elena">See Elena's example</a>
       <a class="muted" href="#/artifact/${kind}/versions">History</a></div>
+    ${window._art.restoredDraft?`<div class="card" style="border-color:var(--accent2)"><strong>Recovered your unsaved edits from last time.</strong><div class="muted">Your work is safe. It saves as you type now.</div><button class="ghost" style="margin-top:6px" onclick="discardDraft()">Use the saved version instead</button></div>`:''}
     ${window._art.presence&&window._art.presence.length?`<div class="card" style="border-color:var(--accent2)"><strong>Before you can submit:</strong><ul>${window._art.presence.map(m=>'<li>'+esc(m)+'</li>').join('')}</ul></div>`:''}
     <div id="ed">${body}</div>
     ${(status==='submitted'||status==='verified')
@@ -56,6 +74,8 @@ function render_art(){
           </div>
         </div>`}`;
   renderTabs('binder');
+  const _ed=document.getElementById('ed');
+  if(_ed){ _ed.addEventListener('input', scheduleDraftSave); _ed.addEventListener('change', scheduleDraftSave); }
 }
 
 const VOC_BUCKETS=['fears','frustrations','dream','exact_words','objections','price'];
@@ -158,6 +178,7 @@ async function saveArtifact(pivotReason){
   try{
     const r = await api('/api/artifacts/'+kind,{method:'PUT',body:JSON.stringify(body)});
     window._art.presence = r.presence_missing;
+    clearDraft(kind); window._art.restoredDraft=false; window._art.serverData=undefined;
     setErr('Saved. Version '+r.version+'.', true);
     return true;
   }catch(e){

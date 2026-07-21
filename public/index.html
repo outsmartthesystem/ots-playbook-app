@@ -161,16 +161,22 @@ async function screenHome(){
 }
 
 async function screenPlaybook(){
-  const { chapters } = await api('/api/chapters');
+  const [next, res] = await Promise.all([api('/api/me/next').catch(()=>({})), api('/api/chapters')]);
+  const list = res.chapters.filter(c=>c.number>=1);
+  const curNum = (next && next.next && next.next.number) || 1;
+  const card = (c, active)=>`<div class="station" ${active?'style="border:2px solid var(--accent)"':''} onclick="location.hash='#/chapter/${esc(c.stable_key)}'">
+      <div><strong>${c.number}. ${esc(c.title)}</strong>
+        <div class="muted">${esc(c.walk_away||'')}</div></div>
+      <span class="pill">&rsaquo;</span></div>`;
+  const current = list.find(c=>c.number===curNum);
+  const upnext = list.find(c=>c.number===curNum+1);
+  const rest = list.filter(c=>c.number!==curNum && c.number!==curNum+1);
   app.innerHTML = `<h1>The playbook</h1>
-    <p class="muted">Twelve chapters. Each one produces a real business document.</p>
-    ${chapters.filter(c=>c.number>=1).map(c=>
-      `<div class="station" onclick="location.hash='#/chapter/${esc(c.stable_key)}'">
-        <div><strong>${c.number}. ${esc(c.title)}</strong>
-          <div class="muted">${esc(c.walk_away||'')}</div>
-          <div class="muted">${esc(c.rough_time||'')}</div></div>
-        <span class="pill">&rsaquo;</span></div>`).join('')}
-    <p class="foot">Read in order the first time. Do the move at the end of each chapter before the next.</p>`;
+    <p class="muted">One mission at a time. Finish the move at the end of each chapter before the next.</p>
+    ${current?`<div class="muted" style="font-size:12px;margin-top:10px">You are here</div>${card(current,true)}`:''}
+    ${upnext?`<div class="muted" style="font-size:12px;margin-top:12px">Up next</div>${card(upnext,false)}`:''}
+    ${rest.length?`<details style="margin-top:14px"><summary style="cursor:pointer;color:var(--muted);padding:8px 0">The whole road map (${list.length} chapters)</summary>${rest.map(c=>card(c,false)).join('')}</details>`:''}
+    <p class="foot">Read in order the first time.</p>`;
   renderTabs('playbook');
 }
 

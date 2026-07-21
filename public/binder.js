@@ -291,21 +291,27 @@ async function acceptPromises(){
 async function screenReviewQueue(){
   const { queue, snippets } = await api('/api/admin/review-queue');
   window._snips = snippets;
-  app.innerHTML = `<a class="muted" href="#/admin">&lsaquo; Cohort</a><h1>Review queue (${queue.length})</h1>
+  app.innerHTML = `<a class="muted" href="#/admin">&lsaquo; Cohort</a>
+    <div class="cockpit-head">
+      <div class="cockpit-eye">Cockpit &middot; Review</div>
+      <div class="cockpit-n ${queue.length?'':'clear'}">${queue.length}</div>
+      <div class="cockpit-l">In queue</div>
+    </div>
     <p class="muted">Oldest first. Drive this to zero.</p>
-    ${queue.length? queue.map(a=>`<div class="station" onclick="location.hash='#/review/${a.id}'">
+    ${queue.length? queue.map(a=>`<div class="station rail-review" onclick="location.hash='#/review/${a.id}'">
       <div><strong>${esc(a.first_name)} ${esc(a.last_initial||'')} &middot; ${esc(prettyKind(a.kind))}</strong>
-        <div class="muted">Ch ${a.chapter_number||''} &middot; submitted ${new Date(a.submitted_at).toLocaleString()}${a.open_flag_count?` &middot; ${a.open_flag_count} flag`:''}</div></div>
-      <span class="pill">review</span></div>`).join('') : '<p class="muted">Nothing waiting. Nice.</p>'}`;
+        <div class="muted">Ch ${a.chapter_number||''} &middot; submitted ${new Date(a.submitted_at).toLocaleString()}${a.open_flag_count?` &middot; <span class="count-parked">${a.open_flag_count} flag</span>`:''}</div></div>
+      <span class="pill in_progress">review</span></div>`).join('') : '<div class="card rail-ok">Queue clear. Nothing waiting.</div>'}`;
   renderTabs();
 }
 async function screenReviewArtifact(id){
   const d = await api('/api/admin/artifacts/'+id);
   const a = d.artifact;
   app.innerHTML = `<a class="muted" href="#/review">&lsaquo; Queue</a>
+    <div class="cockpit-eye">Cockpit &middot; Review</div>
     <h1>${esc(a.first_name)}: ${esc(prettyKind(a.kind))} ${statusPill(a.status)}</h1>
-    ${d.acceptance_proof?`<div class="card" style="border-color:var(--accent)"><strong>Check for:</strong> ${esc(d.acceptance_proof)}</div>`:''}
-    ${a.open_flag_count?`<div class="card" style="border-color:var(--accent2)">${a.open_flag_count} open "verify before publishing" flag(s).</div>`:''}
+    ${d.acceptance_proof?`<div class="card rail-review"><strong>Check for:</strong> ${esc(d.acceptance_proof)}</div>`:''}
+    ${a.open_flag_count?`<div class="card rail-revise"><strong>${a.open_flag_count} open "verify before publishing" flag(s).</strong></div>`:''}
     <div class="card">${humanizeArtifact(a.data)}</div>
     ${d.pivots.length?`<h2>Pivots</h2>${d.pivots.map(p=>`<div class="card"><strong>${esc(p.field)}</strong>: ${esc(p.old_value)} &rarr; ${esc(p.new_value)}<div class="muted">${esc(p.reason)}</div></div>`).join('')}`:''}
     <div class="card">
@@ -314,8 +320,8 @@ async function screenReviewArtifact(id){
       <textarea id="rn" rows="3"></textarea>
       <div id="rev_err" class="err"></div>
       <div class="row">
-        <button class="grow" onclick="verifyArtifact(${id})">Verify</button>
-        <button class="ghost" onclick="returnArtifact(${id})">Return with note</button>
+        <button class="grow ok" onclick="verifyArtifact(${id})">Verify</button>
+        <button class="revise" onclick="returnArtifact(${id})">Return with note</button>
       </div>
     </div>`;
   renderTabs();

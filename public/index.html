@@ -23,7 +23,12 @@
     --accent2:#D97567;     /* revise / parked */
     --rule:rgba(236,231,223,.10); /* hairline borders */
     --ok:#7FB069;
-    --danger:#C4574A;
+    --ok-ink:#0E1B08;      /* dark text on the ok-green Verify button */
+    --danger:#C4574A;      /* child-safety only: thin rails, borders, .err text */
+    --danger-fill:#A83E33; /* darkened danger for SOLID marks (AA-safe w/ danger-ink) */
+    --danger-ink:#FBEEEB;  /* near-white text on danger fills */
+    --danger-tint:rgba(196,87,74,.12); /* danger surface wash */
+    --danger-line:rgba(196,87,74,.50); /* strong danger hairline */
     --serif:'Fraunces',Georgia,'Times New Roman',serif;
     --sans:'Inter',system-ui,-apple-system,'Segoe UI',Arial,sans-serif;
   }
@@ -69,6 +74,26 @@
   .err{ color:var(--danger); font-size:14px; }
   .row{ display:flex; gap:8px; align-items:center; }
   .grow{ flex:1; }
+  /* ---------- admin cockpit (operator-only) accents. Appended last so single-class
+     rail/badge rules win by source order over .station / .card. ---------- */
+  .cockpit-eye{ font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); margin-bottom:6px; }
+  .cockpit-head{ border-bottom:1px solid var(--rule); padding-bottom:10px; margin:2px 0 12px; }
+  .cockpit-n{ font-family:var(--serif); font-weight:600; font-size:32px; line-height:1; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .cockpit-n.clear{ color:var(--ok); }
+  .cockpit-n.flag{ color:var(--danger); }
+  .cockpit-l{ font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-top:3px; }
+  .rail-review{ box-shadow:inset 3px 0 0 var(--accent); }
+  .rail-ok{ box-shadow:inset 3px 0 0 var(--ok); }
+  .rail-revise{ box-shadow:inset 3px 0 0 var(--accent2); }
+  .rail-flag{ box-shadow:inset 4px 0 0 var(--danger); background:var(--danger-tint); }
+  .badge-flag{ display:inline-block; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; padding:2px 8px; border-radius:3px; background:var(--danger-fill); color:var(--danger-ink); }
+  .danger-banner{ border:1px solid var(--danger-line); box-shadow:inset 4px 0 0 var(--danger); background:var(--danger-tint); border-radius:3px; padding:14px; margin:12px 0; }
+  .dnc-bar{ display:block; margin-top:10px; padding:9px 12px; border-radius:3px; background:var(--danger-fill); color:var(--danger-ink); font-weight:700; letter-spacing:.04em; text-transform:uppercase; font-size:13px; }
+  button.ok, .btn.ok{ background:var(--ok); color:var(--ok-ink); }
+  button.ok:hover, .btn.ok:hover{ filter:brightness(1.06); }
+  button.revise, .btn.revise{ background:transparent; color:var(--accent2); border:1px solid var(--accent2); }
+  button.revise:hover, .btn.revise:hover{ background:rgba(217,117,103,.08); }
+  .count-parked{ color:var(--accent2); font-weight:600; }
 </style>
 </head>
 <body>
@@ -280,7 +305,12 @@ async function doPark(key){
 // ---------- admin ----------
 async function screenAdmin(){
   const { students } = await api('/api/admin/students');
-  app.innerHTML = `<h1>Cohort</h1>
+  app.innerHTML = `
+    <div class="cockpit-head">
+      <div class="cockpit-eye">OTS Cockpit &middot; Cohort</div>
+      <div class="cockpit-n">${students.length}</div>
+      <div class="cockpit-l">Students</div>
+    </div>
     <p class="muted"><a href="#/review">Review queue</a> &middot; <a href="#/inbox">Question inbox</a></p>
     <div class="card">
       <label>Create a demo student (P0)</label>
@@ -292,7 +322,7 @@ async function screenAdmin(){
     <h2>Students (${students.length})</h2>
     ${students.length? students.map(s=>`<div class="station" onclick="location.hash='#/admin/student/${s.id}'">
       <div><strong>${esc(s.first_name)} ${esc(s.last_initial||'')}</strong>
-        <div class="muted">${s.steps_done} done, ${s.steps_parked} parked. Last: ${s.last_activity?new Date(s.last_activity).toLocaleString():'never'}</div></div>
+        <div class="muted">${s.steps_done} done, ${s.steps_parked?`<span class="count-parked">${s.steps_parked} parked</span>`:'0 parked'}. Last: ${s.last_activity?new Date(s.last_activity).toLocaleString():'never'}</div></div>
       <span class="pill">${esc(s.account_state)}</span></div>`).join('') : '<p class="muted">No students yet.</p>'}
     <p class="foot"><a href="#" onclick="logout();return false">Log out</a></p>`;
   renderTabs();
@@ -306,7 +336,9 @@ async function createStudent(){
 }
 async function screenAdminStudent(id){
   const { student, timeline } = await api('/api/admin/students/'+id);
+  const railFor = s => ({done:'rail-ok',verified:'rail-ok',parked:'rail-revise',submitted:'rail-review',in_progress:'rail-review'}[s]||'');
   app.innerHTML = `<a class="muted" href="#/admin">&lsaquo; Cohort</a>
+    <div class="cockpit-eye">Cockpit &middot; Student</div>
     <h1>${esc(student.first_name)} ${esc(student.last_initial||'')}</h1>
     <div class="muted">${esc(student.account_state)} &middot; <a href="#/report/${id}">Application report</a></div>
     <div class="card"><strong>Exports</strong>
@@ -317,7 +349,7 @@ async function screenAdminStudent(id){
         <a href="#" onclick="downloadAuth('/api/admin/export/artifacts.csv','artifacts.csv');return false">artifacts.csv</a> &middot;
         <a href="#" onclick="downloadAuth('/api/admin/export/questions.csv','questions.csv');return false">questions.csv</a></div></div>
     <h2>Activity</h2>
-    ${timeline.length? timeline.map(t=>`<div class="card">
+    ${timeline.length? timeline.map(t=>`<div class="card ${railFor(t.status)}">
       <div class="row"><strong class="grow">Ch ${t.chapter_number}: ${esc(t.title)}</strong>${statusPill(t.status)}</div>
       ${t.done_note?`<div class="muted">Did: ${esc(t.done_note)}</div>`:''}
       ${t.parked_reason?`<div class="muted">Parked: ${esc(t.parked_reason)}</div>`:''}

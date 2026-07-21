@@ -247,30 +247,50 @@ async function askQuestion(){
     screenQuestions();
   }catch(e){ document.getElementById('q_err').textContent=e.message; }
 }
+/* ---------- admin cockpit safety tiers (shared by inbox list + thread so they never drift) ---------- */
+const SAFETY_DANGER = ['CRISIS_SELF_HARM','ABUSE','EXPLOITATION_SEXTORTION','THREAT'];
+const SAFETY_DNC = ['ABUSE','EXPLOITATION_SEXTORTION'];
+function safetyTier(q){ if(SAFETY_DANGER.includes(q.class)) return 'danger'; if(q.class!=='QUESTION'||q.status==='quarantined') return 'hold'; return 'ok'; }
+
 async function screenInbox(){
   const d=await api('/api/admin/questions');
-  app.innerHTML=`<a class="muted" href="#/admin">&lsaquo; Cohort</a><h1>Question inbox (${d.questions.length})</h1>
+  const flaggedN = d.questions.filter(q=>safetyTier(q)==='danger').length;
+  app.innerHTML=`<a class="muted" href="#/admin">&lsaquo; Cohort</a>
+    <div class="cockpit-head">
+      <div class="cockpit-eye">Cockpit &middot; Inbox</div>
+      <div class="row" style="gap:28px;align-items:flex-end">
+        <div><div class="cockpit-n ${d.questions.length?'':'clear'}">${d.questions.length}</div><div class="cockpit-l">Open</div></div>
+        ${flaggedN?`<div><div class="cockpit-n flag">${flaggedN}</div><div class="cockpit-l">Safety-flagged</div></div>`:''}
+      </div>
+    </div>
     <p class="muted">SLA: ${esc(d.sla_business_days)} business days. Flagged items first.</p>
-    ${d.questions.length?d.questions.map(q=>`<div class="station" onclick="location.hash='#/inbox/${q.id}'">
-      <div><strong>${esc(q.first_name)} ${esc(q.last_initial||'')}</strong> ${q.status==='quarantined'?'<span class="pill parked">flagged</span>':''}
-        <div class="muted">Ch ${q.chapter_number||''} &middot; ${new Date(q.created_at).toLocaleString()}</div></div>
-      <span class="pill">${esc(q.status)}</span></div>`).join(''):'<p class="muted">Empty. Nice.</p>'}`;
+    ${d.questions.length?d.questions.map(q=>{ const t=safetyTier(q);
+      return `<div class="station ${t==='danger'?'rail-flag':t==='hold'?'rail-revise':''}" onclick="location.hash='#/inbox/${q.id}'">
+        <div>${t==='danger'?`<span class="badge-flag">Safety${SAFETY_DNC.includes(q.class)?' &middot; Do not contact':''}</span> `:''}<strong>${esc(q.first_name)} ${esc(q.last_initial||'')}</strong>${t==='hold'?' <span class="pill parked">hold</span>':''}
+          <div class="muted">${t==='danger'?esc(q.class.replace(/_/g,' '))+' &middot; ':''}Ch ${q.chapter_number||''} &middot; ${new Date(q.created_at).toLocaleString()}</div></div>
+        <span class="pill">${esc(q.status)}</span></div>`;
+    }).join(''):'<div class="card rail-ok">Inbox clear. Nothing to answer.</div>'}`;
   renderTabs();
 }
 async function screenInboxThread(id){
   const d=await api('/api/admin/questions/'+id); const q=d.question;
-  const flagged = q.class!=='QUESTION' || q.status==='quarantined';
-  const dnc = ['ABUSE','EXPLOITATION_SEXTORTION'].includes(q.class);
+  const t=safetyTier(q); const isDanger=t==='danger'; const hold=t==='hold';
+  const dnc = SAFETY_DNC.includes(q.class);
   app.innerHTML=`<a class="muted" href="#/inbox">&lsaquo; Inbox</a>
-    <h1>${esc(q.first_name)}: ${esc(q.class)}</h1>
-    ${flagged?`<div class="card" style="border-color:var(--accent2)"><strong>Safety-flagged (${esc(q.class)}).</strong> Follow docs/SAFETY-SOP.md. ${dnc?'DO NOT contact the parent.':''} This read is audit-logged.</div>`:''}
+    <div class="cockpit-eye">${isDanger?'Cockpit &middot; Safety thread':'Cockpit &middot; Thread'}</div>
+    <h1>${esc(q.first_name)}: ${esc(q.class.replace(/_/g,' '))}</h1>
+    ${isDanger?`<div class="danger-banner">
+       <span class="badge-flag">Safety flag &middot; ${esc(q.class.replace(/_/g,' '))}</span>
+       <p style="margin:8px 0 0">Follow <strong>docs/SAFETY-SOP.md</strong>. This read is audit-logged.${q.class==='THREAT'?' Escalate to a supervisor immediately.':''}</p>
+       ${dnc?`<div class="dnc-bar">Do not contact the parent</div>`:''}
+     </div>`
+     : hold?`<div class="card rail-revise"><strong>Set aside for review (${esc(q.class)}).</strong> Follow docs/SAFETY-SOP.md. This read is audit-logged.</div>`:''}
     <div class="card"><p>${esc(q.body)}</p></div>
     ${d.replies.map(r=>`<div class="card"><strong>${r.author_id===q.student_id?'student':'jay'}:</strong> ${esc(r.body)}</div>`).join('')}
-    ${!flagged?`<div class="card">
+    ${(isDanger||hold)?'<p class="muted">Flagged threads are handled per the SOP, not answered as coursework here.</p>':`<div class="card">
       <div>${(d.canned||[]).map(c=>`<button class="ghost" style="font-size:12px;padding:6px" data-body="${esc(c.body)}" onclick="document.getElementById('ans').value=this.dataset.body">${esc(c.title)}</button>`).join(' ')}</div>
       <textarea id="ans" rows="3"></textarea><div id="ans_err" class="err"></div>
-      <button onclick="answerQuestion(${id})">Answer</button></div>`
-      :'<p class="muted">Flagged threads are handled per the SOP, not answered as coursework here.</p>'}`;
+      <button onclick="answerQuestion(${id})">Answer</button></div>`}`;
   renderTabs();
 }
 async function answerQuestion(id){
@@ -297,10 +317,13 @@ async function logAction(kind, chapterKey){
 async function confirmSale(id){ try{ await api('/api/parent/actions/'+id+'/confirm-sale',{method:'POST',body:'{}'}); screenParentHome(); }catch(e){ alert(e.message); } }
 async function screenReport(id){
   const d=await api('/api/admin/students/'+id+'/report');
-  const arrow = d.momentum==='up'?'&uarr; building':d.momentum==='down'?'&darr; slowing':'&rarr; steady';
+  const mo = d.momentum==='up' ? '<span class="pill done">&uarr; building</span>'
+    : d.momentum==='down' ? '<span class="pill parked">&darr; slowing</span>'
+    : '<span class="pill">&rarr; steady</span>';
   app.innerHTML=`<a class="muted" href="#/admin/student/${id}">&lsaquo; Back</a>
+    <div class="cockpit-eye">Cockpit &middot; Report</div>
     <h1>${esc(d.student.first_name)}: application report</h1>
-    <div class="muted">Momentum: ${arrow}</div>
+    <div class="muted">Momentum: ${mo}</div>
     <div class="card"><strong>Reading</strong><div class="muted">${d.reading.steps_done} steps done &middot; ${d.reading.docs_submitted} documents submitted &middot; ${d.reading.docs_verified} verified by you</div></div>
     <div class="card"><strong>Applying</strong> <span class="muted" style="font-size:12px">self-reported</span>
       ${d.applying.length?d.applying.map(a=>`<div>${esc(a.action_kind.replace(/_/g,' '))}: <strong>${a.n}</strong>${a.cents?` ($${a.cents/100})`:''}</div>`).join(''):'<div class="muted">No real-world actions logged yet. Reading is not doing.</div>'}</div>

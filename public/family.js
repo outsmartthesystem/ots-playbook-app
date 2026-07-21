@@ -31,9 +31,9 @@ async function screenParentHome(){
   const { children } = await api('/api/parent/children');
   let sales=[]; try{ sales=(await api('/api/parent/sales-to-confirm')).sales; }catch(_){}
   app.innerHTML=`<h1>Your teens</h1>
-    ${sales.length?`<div class="card hero"><strong style="color:#fff">A first sale to confirm</strong>
+    ${sales.length?`<div class="card hero"><strong>A first sale to confirm</strong>
       ${sales.map(s=>`<div style="margin:8px 0">${esc(s.first_name)} logged ${s.amount_cents?'$'+(s.amount_cents/100):'a sale'} on ${esc(s.occurred_on)}.
-        <button class="ghost" style="background:#fff;margin-top:6px" onclick="confirmSale(${s.id})">Confirm it happened</button></div>`).join('')}</div>`:''}
+        <button class="ghost" style="margin-top:6px" onclick="confirmSale(${s.id})">Confirm it happened</button></div>`).join('')}</div>`:''}
     ${children.length?children.map(c=>`<div class="station" onclick="location.hash='#/child/${c.id}'">
       <div><strong>${esc(c.first_name)} ${esc(c.last_initial||'')}</strong><div class="muted">${esc(c.account_state)}</div></div><span class="pill">&rsaquo;</span></div>`).join('')
       :'<p class="muted">No teen linked yet. Add yours below.</p>'}
@@ -145,7 +145,7 @@ function numRow(k,label){ return `<label>${label}</label><div class="row"><input
 async function screenScore(){
   const d=await api('/api/me/scoreboard');
   app.innerHTML=`<h1>Scoreboard</h1>
-    ${d.today_is_review_day?`<div class="card hero"><strong style="color:#fff">It is your review day.</strong><div class="muted">20 minutes. Numbers first, feelings second.</div></div>`:''}
+    ${d.today_is_review_day?`<div class="card hero"><strong>It is your review day.</strong><div class="muted">20 minutes. Numbers first, feelings second.</div></div>`:''}
     <div class="card">
       <label>Week starting (Monday)</label><input id="sc_week" type="date" value="${d.this_monday}">
       ${numRow('clicks','Clicks')}${numRow('leads','Leads')}${numRow('paid','Paid')}${numRow('revenue','Revenue (dollars)')}
@@ -304,7 +304,7 @@ async function screenReport(id){
     <div class="card"><strong>Reading</strong><div class="muted">${d.reading.steps_done} steps done &middot; ${d.reading.docs_submitted} documents submitted &middot; ${d.reading.docs_verified} verified by you</div></div>
     <div class="card"><strong>Applying</strong> <span class="muted" style="font-size:12px">self-reported</span>
       ${d.applying.length?d.applying.map(a=>`<div>${esc(a.action_kind.replace(/_/g,' '))}: <strong>${a.n}</strong>${a.cents?` ($${a.cents/100})`:''}</div>`).join(''):'<div class="muted">No real-world actions logged yet. Reading is not doing.</div>'}</div>
-    ${d.first_dollar?`<div class="card hero"><strong style="color:#fff">First dollar: ${d.first_dollar.amount_cents?'$'+(d.first_dollar.amount_cents/100):'logged'}</strong><div class="muted">${d.first_dollar.confirmed_at?'Parent-confirmed.':'Waiting on parent confirmation.'}</div></div>`:''}
+    ${d.first_dollar?`<div class="card hero"><strong>First dollar: ${d.first_dollar.amount_cents?'$'+(d.first_dollar.amount_cents/100):'logged'}</strong><div class="muted">${d.first_dollar.confirmed_at?'Parent-confirmed.':'Waiting on parent confirmation.'}</div></div>`:''}
     <div class="card"><strong>Actions per week</strong>${d.weekly.length?d.weekly.map(w=>`<div>${esc(w.wk)}: ${w.n}</div>`).join(''):'<div class="muted">none yet</div>'}</div>
     <p class="muted">${esc(d.note)}</p>`;
   renderTabs();

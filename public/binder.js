@@ -24,7 +24,7 @@ function humanizeVal(v){
     const items=v.filter(x=>x!=null&&x!=='');
     if(!items.length) return '';
     if(items.every(x=>typeof x!=='object')) return '<ul>'+items.map(x=>'<li>'+humanizeVal(x)+'</li>').join('')+'</ul>';
-    return items.map(x=>'<div class="card" style="margin:6px 0;background:rgba(0,0,0,.02)">'+humanizeObj(x)+'</div>').join('');
+    return items.map(x=>'<div class="card" style="margin:6px 0;background:var(--panel2)">'+humanizeObj(x)+'</div>').join('');
   }
   if(typeof v==='object') return humanizeObj(v);
   return esc(String(v));
@@ -238,10 +238,10 @@ async function submitArtifact(){
 }
 function celebrate(line){
   app.innerHTML = `<div class="card hero" style="margin-top:40px">
-    <div class="pill" style="background:#fff">ON RECORD</div>
-    <h1 style="color:#fff;margin:.4em 0">${esc(line||'A real business document.')}</h1>
+    <div class="pill" style="background:var(--accent);color:var(--accent-ink);border-color:var(--accent)">ON RECORD</div>
+    <h1 style="margin:.4em 0">${esc(line||'A real business document.')}</h1>
     <div class="muted">You started building. Jay's build took months. Slow and real beats fast and fake.</div>
-    <a class="btn ghost" style="background:#fff;margin-top:12px" href="#/binder">Back to your binder</a></div>`;
+    <a class="btn" style="margin-top:12px" href="#/binder">Back to your binder</a></div>`;
 }
 
 async function screenArtifactVersions(kind){
